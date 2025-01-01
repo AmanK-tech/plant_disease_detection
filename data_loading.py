@@ -108,10 +108,31 @@ def split_dataset(data_dir, output_dir, train_ratio=0.7, val_ratio=0.2, test_rat
 
 
 def create_dataloaders(output_dir, batch_size=32):
-    transform = transforms.Compose([
-        transforms.Resize((128, 128)),  
-        transforms.ToTensor()
-    ])
+
+    train_transform = transforms.Compose([
+    transforms.Resize((128, 128)),
+    transforms.RandomHorizontalFlip(),      
+    transforms.RandomRotation(15),          
+    transforms.ColorJitter(                 
+        brightness=0.2, 
+        contrast=0.2
+    ),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
+    
+    val_transform = transforms.Compose([
+    transforms.Resize((128, 128)),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
+    
 
     def load_split(split):
         split_dir = os.path.join(output_dir, split)
@@ -130,9 +151,9 @@ def create_dataloaders(output_dir, batch_size=32):
     val_paths, val_labels = load_split('val')
     test_paths, test_labels = load_split('test')
 
-    train_dataset = CustomDataset(train_paths, train_labels, transform=transform)
-    val_dataset = CustomDataset(val_paths, val_labels, transform=transform)
-    test_dataset = CustomDataset(test_paths, test_labels, transform=transform)
+    train_dataset = CustomDataset(train_paths, train_labels, transform=train_transform)
+    val_dataset = CustomDataset(val_paths, val_labels, transform=val_transform)
+    test_dataset = CustomDataset(test_paths, test_labels, transform=val_transform)
 
     train_sampler = BatchSampler(Sampler(train_dataset, shuffle=True), batch_size)
     val_sampler = BatchSampler(Sampler(val_dataset, shuffle=False), batch_size)
