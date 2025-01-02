@@ -2,9 +2,6 @@
 import torch
 from torch import nn
 
-import torch
-from torch import nn
-
 def conv(ni, nf, ks, stride=1, padding=1, act=True, bn=True, mp=True, dl=True):
     layers = [nn.Conv2d(ni, nf, kernel_size=ks, stride=stride, padding=padding)]
     if bn:
