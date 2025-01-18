@@ -127,7 +127,7 @@ class Learner:
     def _fit(self, train, valid):
         for self.epoch in range(self.n_epochs):
             if train: self.one_epoch(True)
-            if valid: 
+            if valid:
               with torch.no_grad(): self.one_epoch(False)
 
     def fit(self, n_epochs=1, train=True, valid=True, cbs=None, lr=None):
@@ -135,6 +135,7 @@ class Learner:
         for cb in cbs: self.cbs.append(cb)
         try:
             self.n_epochs = n_epochs
+            self.n_epochs = range(n_epochs)
             if lr is None: lr = self.lr
             self.opt = self.opt_func(self.model.parameters(), lr)
             self._fit(train, valid)
