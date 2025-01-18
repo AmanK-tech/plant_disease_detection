@@ -1,4 +1,3 @@
-
 import torch
 from torch.optim.lr_scheduler import ExponentialLR
 from torcheval.metrics import MulticlassAccuracy, Mean
@@ -13,77 +12,56 @@ import fastcore.foundation as fc
 from fastprogress.fastprogress import master_bar, progress_bar
 import matplotlib.pyplot as plt
 import math
+from torch.utils.data import DataLoader
 
 class CancelFitException(Exception): pass
 class CancelBatchException(Exception): pass
 class CancelEpochException(Exception): pass
 
+class LenDataLoader:
+    def __init__(self, dataloader):
+        self.dataloader = dataloader
+        self._length = len(dataloader.dataset) // dataloader.batch_size + (0 if len(dataloader.dataset) % dataloader.batch_size == 0 else 1)
+    
+    def __iter__(self):
+        return iter(self.dataloader)
+    
+    def __len__(self):
+        return self._length
+
 class Callback:
     order = 0
-    def before_fit(self, learn): pass
-    def after_fit(self, learn): pass
-    def before_epoch(self, learn): pass
-    def after_epoch(self, learn): pass
-    def before_batch(self, learn): pass
-    def after_batch(self, learn): pass
-    def after_predict(self, learn): pass
-    def after_loss(self, learn): pass
-    def after_backward(self, learn): pass
-    def after_step(self, learn): pass
-    def cleanup_fit(self, learn): pass
-
 
 def run_cbs(cbs, method_nm, learn=None):
     for cb in sorted(cbs, key=attrgetter('order')):
         method = getattr(cb, method_nm, None)
         if method is not None: method(learn)
 
-
 class CompletionCB(Callback):
     def before_fit(self, learn): self.count = 0
     def after_batch(self, learn): self.count += 1
     def after_fit(self, learn): print(f'Completed {self.count} batches')
 
-
 class Metric:
     def __init__(self): self.reset()
     def reset(self): self.vals, self.ns = [], []
+    
     def add(self, inp, targ=None, n=1):
-        try:
-            self.last = self.calc(inp, targ)
-            self.vals.append(self.last)
-            self.ns.append(n)
-        except Exception as e:
-            print(f"Error in metric calculation: {e}")
-            self.last = 0
-            self.vals.append(0)
-            self.ns.append(n)
+        self.last = self.calc(inp, targ)
+        self.vals.append(self.last)
+        self.ns.append(n)
     
     @property
     def value(self):
-        if not self.vals: return 0
         ns = tensor(self.ns)
-        try:
-            return ((tensor(self.vals) * ns).sum() / ns.sum()).item()
-        except Exception as e:
-            print(f"Error computing metric value: {e}")
-            return 0
+        return ((tensor(self.vals) * ns).sum() / ns.sum()).item()
     
-    def calc(self, inp, targ): 
-        try:
-            return (inp == targ).float().mean()
-        except Exception as e:
-            print(f"Error in calc method: {e}")
-            return 0
+    def calc(self, inp, targ): return (inp == targ).float().mean()
 
 def to_cpu(x):
-    try:
-        if isinstance(x, Mapping): return {k: to_cpu(v) for k,v in x.items()}
-        if isinstance(x, (list,tuple)): return type(x)(to_cpu(o) for o in x)
-        return x.detach().cpu() if isinstance(x, torch.Tensor) else x
-    except Exception as e:
-        print(f"Error in to_cpu conversion: {e}")
-        return x
+    if isinstance(x, Mapping): return {k: to_cpu(v) for k,v in x.items()}
+    if isinstance(x, (list,tuple)): return type(x)(to_cpu(o) for o in x)
+    return x.detach().cpu() if isinstance(x, torch.Tensor) else x
 
 class MetricsCB(Callback):
     def __init__(self, *ms, **metrics):
@@ -93,53 +71,32 @@ class MetricsCB(Callback):
         self.all_metrics['loss'] = self.loss = Mean()
 
     def _log(self, d): print(d)
-    
     def before_fit(self, learn): learn.metrics = self
-    
-    def before_epoch(self, learn): 
-        [m.reset() for m in self.all_metrics.values()]
+    def before_epoch(self, learn): [m.reset() for m in self.all_metrics.values()]
     
     def after_epoch(self, learn):
-        try:
-            log = {k: f'{v.compute():.3f}' for k,v in self.all_metrics.items()}
-            log['epoch'] = learn.epoch
-            log['train'] = 'train' if learn.training else 'eval'
-            self._log(log)
-        except Exception as e:
-            print(f"Error in after_epoch logging: {e}")
+        log = {k: f'{v.compute():.3f}' for k,v in self.all_metrics.items()}
+        log['epoch'] = learn.epoch
+        log['train'] = 'train' if learn.training else 'eval'
+        self._log(log)
     
     def after_batch(self, learn):
-        try:
-            x,y,*_ = to_cpu(learn.batch)
-            for m in self.metrics.values():
-                m.update(to_cpu(learn.preds), y)
-            self.loss.update(to_cpu(learn.loss), weight=len(x))
-        except Exception as e:
-            print(f"Error in after_batch metrics update: {e}")
+        x,y,*_ = to_cpu(learn.batch)
+        for m in self.metrics.values():
+            m.update(to_cpu(learn.preds), y)
+        self.loss.update(to_cpu(learn.loss), weight=len(x))
 
 default_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def to_device(obj, device):
-    try:
-        if isinstance(obj, (list,tuple)): return [to_device(o,device) for o in obj]
-        if isinstance(obj, dict): return {k: to_device(v,device) for k,v in obj.items()}
-        return obj.to(device) if hasattr(obj,'to') else obj
-    except Exception as e:
-        print(f"Error in device transfer: {e}")
-        return obj
+    if isinstance(obj, (list,tuple)): return [to_device(o,device) for o in obj]
+    if isinstance(obj, dict): return {k: to_device(v,device) for k,v in obj.items()}
+    return obj.to(device) if hasattr(obj,'to') else obj
 
 class DeviceCB(Callback):
     def __init__(self, device=default_device): self.device = device
-    def before_fit(self, learn): 
-        try:
-            learn.model.to(self.device)
-        except Exception as e:
-            print(f"Error moving model to device: {e}")
-    def before_batch(self, learn): 
-        try:
-            learn.batch = to_device(learn.batch, device=self.device)
-        except Exception as e:
-            print(f"Error moving batch to device: {e}")
+    def before_fit(self, learn): learn.model.to(self.device)
+    def before_batch(self, learn): learn.batch = to_device(learn.batch, device=self.device)
 
 class with_cbs:
     def __init__(self, nm): self.nm = nm
@@ -150,10 +107,7 @@ class with_cbs:
                 f(o, *args, **kwargs)
                 o.callback(f'after_{self.nm}')
             except globals()[f'Cancel{self.nm.title()}Exception']: pass
-            except Exception as e:
-                print(f"Error in {self.nm}: {e}")
-            finally: 
-                o.callback(f'cleanup_{self.nm}')
+            finally: o.callback(f'cleanup_{self.nm}')
         return _f
 
 class Learner:
@@ -163,11 +117,15 @@ class Learner:
         if dls is None:
             self.dls = {'train': None, 'valid': None}
         elif isinstance(dls, dict):
-            self.dls = dls
+            self.dls = {k: LenDataLoader(v) if isinstance(v, DataLoader) else v 
+                       for k, v in dls.items()}
         elif isinstance(dls, (list, tuple)):
-            self.dls = {'train': dls[0], 'valid': dls[1] if len(dls) > 1 else None}
+            train_dl = LenDataLoader(dls[0]) if isinstance(dls[0], DataLoader) else dls[0]
+            valid_dl = LenDataLoader(dls[1]) if len(dls) > 1 and isinstance(dls[1], DataLoader) else dls[1] if len(dls) > 1 else None
+            self.dls = {'train': train_dl, 'valid': valid_dl}
         else:
-            self.dls = {'train': dls, 'valid': None}
+            self.dls = {'train': LenDataLoader(dls) if isinstance(dls, DataLoader) else dls, 
+                       'valid': None}
             
         self.loss_func = loss_func
         self.lr = lr
@@ -189,11 +147,8 @@ class Learner:
 
     @with_cbs('epoch')
     def _one_epoch(self):
-        try:
-            for self.iter,self.batch in enumerate(self.dl):
-                self._one_batch()
-        except Exception as e:
-            print(f"Error in epoch iteration: {e}")
+        for self.iter,self.batch in enumerate(self.dl):
+            self._one_batch()
 
     def one_epoch(self, training):
         self.model.train(training)
@@ -206,8 +161,7 @@ class Learner:
         for self.epoch in range(self.n_epochs):
             if train: self.one_epoch(True)
             if valid and self.dls['valid'] is not None:
-                with torch.no_grad(): 
-                    self.one_epoch(False)
+                with torch.no_grad(): self.one_epoch(False)
 
     def fit(self, n_epochs=1, train=True, valid=True, cbs=None, lr=None):
         cbs = fc.L([] if cbs is None else cbs)
@@ -218,8 +172,6 @@ class Learner:
             if lr is None: lr = self.lr
             self.opt = self.opt_func(self.model.parameters(), lr)
             self._fit(train, valid)
-        except Exception as e:
-            print(f"Error during training: {e}")
         finally:
             for cb in cbs: self.cbs.remove(cb)
 
@@ -235,125 +187,66 @@ class Learner:
 
 class TrainCB(Callback):
     def __init__(self, n_inp=1): self.n_inp = n_inp
-    
-    def predict(self, learn): 
-        try:
-            learn.preds = learn.model(*learn.batch[:self.n_inp])
-        except Exception as e:
-            print(f"Error in prediction: {e}")
-            learn.preds = None
-            
-    def get_loss(self, learn): 
-        try:
-            if learn.preds is not None:
-                learn.loss = learn.loss_func(learn.preds, *learn.batch[self.n_inp:])
-            else:
-                learn.loss = torch.tensor(0.0, requires_grad=True)
-        except Exception as e:
-            print(f"Error computing loss: {e}")
-            learn.loss = torch.tensor(0.0, requires_grad=True)
-            
-    def backward(self, learn): 
-        try:
-            learn.loss.backward()
-        except Exception as e:
-            print(f"Error in backward pass: {e}")
-            
-    def step(self, learn): 
-        try:
-            learn.opt.step()
-        except Exception as e:
-            print(f"Error in optimizer step: {e}")
-            
-    def zero_grad(self, learn): 
-        try:
-            learn.opt.zero_grad()
-        except Exception as e:
-            print(f"Error in zero_grad: {e}")
+    def predict(self, learn): learn.preds = learn.model(*learn.batch[:self.n_inp])
+    def get_loss(self, learn): learn.loss = learn.loss_func(learn.preds, *learn.batch[self.n_inp:])
+    def backward(self, learn): learn.loss.backward()
+    def step(self, learn): learn.opt.step()
+    def zero_grad(self, learn): learn.opt.zero_grad()
 
 class ProgressCB(Callback):
     order = MetricsCB.order + 1
     
-    def __init__(self, plot=False): 
-        self.plot = plot
-        
+    def __init__(self, plot=False): self.plot = plot
+    
     def before_fit(self, learn):
-        try:
-            learn.epochs = self.mbar = master_bar(learn.epochs)
-            self.first = True
-            if hasattr(learn, 'metrics'): learn.metrics._log = self._log
-            self.losses, self.val_losses = [], []
-        except Exception as e:
-            print(f"Error initializing progress bar: {e}")
-            
+        learn.epochs = self.mbar = master_bar(learn.epochs)
+        self.first = True
+        if hasattr(learn, 'metrics'): learn.metrics._log = self._log
+        self.losses, self.val_losses = [], []
+    
     def _log(self, d):
-        try:
-            if self.first:
-                self.mbar.write(list(d), table=True)
-                self.first = False
-            self.mbar.write(list(d.values()), table=True)
-        except Exception as e:
-            print(f"Error logging progress: {e}")
-            
-    def before_epoch(self, learn): 
-        try:
-            learn.dl = progress_bar(learn.dl, leave=False, parent=self.mbar)
-        except Exception as e:
-            print(f"Error setting up epoch progress bar: {e}")
-            
+        if self.first:
+            self.mbar.write(list(d), table=True)
+            self.first = False
+        self.mbar.write(list(d.values()), table=True)
+    
+    def before_epoch(self, learn):
+        if isinstance(learn.dl, DataLoader):
+            learn.dl = LenDataLoader(learn.dl)
+        learn.dl = progress_bar(learn.dl, leave=False, parent=self.mbar)
+    
     def after_batch(self, learn):
-        try:
-            if hasattr(learn, 'loss'):
-                learn.dl.comment = f'{learn.loss:.3f}'
-                if self.plot and learn.training:
-                    self.losses.append(learn.loss.item())
-        except Exception as e:
-            print(f"Error updating batch progress: {e}")
-            
+        learn.dl.comment = f'{learn.loss:.3f}'
+        if self.plot and learn.training:
+            self.losses.append(learn.loss.item())
+    
     def after_epoch(self, learn):
-        try:
-            if not learn.training and self.plot:
-                self.val_losses.append(learn.metrics.all_metrics['loss'].compute())
-                self.mbar.update_graph([self.losses, self.val_losses])
-        except Exception as e:
-            print(f"Error updating epoch progress: {e}")
+        if not learn.training and self.plot:
+            self.val_losses.append(learn.metrics.all_metrics['loss'].compute())
+            self.mbar.update_graph([self.losses, self.val_losses])
 
 class LRFinderCB(Callback):
     def __init__(self, gamma=1.3, max_mult=3): 
-        self.gamma = gamma
-        self.max_mult = max_mult
-        
+        self.gamma,self.max_mult = gamma,max_mult
+    
     def before_fit(self, learn):
-        try:
-            self.sched = ExponentialLR(learn.opt, self.gamma)
-            self.lrs,self.losses = [],[]
-            self.min = math.inf
-        except Exception as e:
-            print(f"Error initializing LR finder: {e}")
-            
+        self.sched = ExponentialLR(learn.opt, self.gamma)
+        self.lrs,self.losses = [],[]
+        self.min = math.inf
+    
     def after_batch(self, learn):
-        try:
-            if not learn.training: raise CancelEpochException()
-            self.lrs.append(learn.opt.param_groups[0]['lr'])
-            loss = to_cpu(learn.loss).item()
-            self.losses.append(loss)
-            if loss < self.min: self.min = loss
-            if math.isnan(loss) or loss > self.min * self.max_mult:
-                raise CancelFitException()
-            self.sched.step()
-        except CancelEpochException:
-            raise
-        except CancelFitException:
-            raise
-        except Exception as e:
-            print(f"Error in LR finder batch processing: {e}")
-            
+        if not learn.training: raise CancelEpochException()
+        self.lrs.append(learn.opt.param_groups[0]['lr'])
+        loss = to_cpu(learn.loss).item()
+        self.losses.append(loss)
+        if loss < self.min: self.min = loss
+        if math.isnan(loss) or loss > self.min * self.max_mult:
+            raise CancelFitException()
+        self.sched.step()
+    
     def cleanup_fit(self, learn):
-        try:
-            plt.plot(self.lrs, self.losses)
-            plt.xscale('log')
-            plt.xlabel('Learning Rate')
-            plt.ylabel('Loss')
-            plt.show()
-        except Exception as e:
-            print(f"Error plotting LR finder results: {e}")
+        plt.plot(self.lrs, self.losses)
+        plt.xscale('log')
+        plt.xlabel('Learning Rate')
+        plt.ylabel('Loss')
+        plt.show()
