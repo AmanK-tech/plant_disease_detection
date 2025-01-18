@@ -211,7 +211,6 @@ class ProgressCB(Callback):
         self.plot = plot
     
     def before_fit(self, learn):
-        
         learn.epochs = list(range(learn.n_epochs))
         self.mbar = master_bar(learn.epochs)
         self.first = True
@@ -228,18 +227,18 @@ class ProgressCB(Callback):
     def before_epoch(self, learn):
         if not isinstance(learn.dl, LenDataLoader):
             learn.dl = LenDataLoader(learn.dl)
-        batches = list(range(len(learn.dl)))
-        learn.dl = progress_bar(batches, leave=False, parent=self.mbar)
-        self.iter = iter(learn.dl.iterable)
+        
+        self.orig_dl = learn.dl
+        learn.dl = progress_bar(learn.dl, leave=False, parent=self.mbar)
     
     def after_batch(self, learn):
         if hasattr(learn, 'loss'):
-            
             learn.dl.comment = f'{float(learn.loss):.3f}'
             if self.plot and learn.training:
                 self.losses.append(float(learn.loss))
     
     def after_epoch(self, learn):
+        learn.dl = self.orig_dl
         if not learn.training and self.plot and hasattr(learn, 'metrics'):
             val_loss = learn.metrics.all_metrics['loss'].compute()
             self.val_losses.append(float(val_loss))
