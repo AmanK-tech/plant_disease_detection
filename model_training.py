@@ -18,7 +18,8 @@ class CancelFitException(Exception): pass
 class CancelBatchException(Exception): pass
 class CancelEpochException(Exception): pass
 
-class Callback: order = 0
+class Callback:
+    order = 0
 
 def run_cbs(cbs, method_nm, learn=None):
     for cb in sorted(cbs, key=attrgetter('order')):
@@ -95,7 +96,7 @@ class with_cbs:
 class Learner:
     def __init__(self, model, dls=None, loss_func=F.mse_loss, lr=0.1, cbs=None, opt_func=optim.Adam):
         self.model = model
-        self.dls = dls
+        self.dls = dls  # dls will be a dictionary
         self.loss_func = loss_func
         self.lr = lr
         self.cbs = fc.L(cbs)
@@ -120,7 +121,7 @@ class Learner:
 
     def one_epoch(self, training):
         self.model.train(training)
-        self.dl = self.dls['train'] if training else self.dls['valid']
+        self.dl = self.dls['train'] if training else self.dls['valid']  # Access from dictionary
         self._one_epoch()
 
     @with_cbs('fit')
@@ -148,6 +149,7 @@ class Learner:
         raise AttributeError(name)
 
     def callback(self, method_nm): run_cbs(self.cbs, method_nm, self)
+    
     @property
     def training(self): return self.model.training
 
