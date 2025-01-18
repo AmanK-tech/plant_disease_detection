@@ -8,9 +8,9 @@ from sklearn.model_selection import train_test_split
 from PIL import Image
 
 def collate(batch):
-    inputs, labels = zip(*batch)  
-    inputs = torch.stack(inputs)  
-    labels = torch.tensor(labels, dtype=torch.long)  
+    inputs, labels = zip(*batch)
+    inputs = torch.stack(inputs)
+    labels = torch.tensor(labels, dtype=torch.long)
     return inputs, labels
 
 
@@ -22,7 +22,7 @@ class CustomDataset:
         self.y = y
         self.transform = transform
         self.label_to_idx = {label: idx for idx, label in enumerate(set(y))}
-        self.y = [self.label_to_idx[label] for label in y]  
+        self.y = [self.label_to_idx[label] for label in y]
 
     def __len__(self):
         return len(self.x)
@@ -70,11 +70,22 @@ class DataLoader:
         self.ds = ds
         self.batch_sampler = batch_sampler
         self.collate_fn = collate_fn or (lambda x: x)
+        self.batch_size = batch_sampler.batch_size
 
     def __iter__(self):
         for batch_indices in self.batch_sampler:
             batch = [self.ds[i] for i in batch_indices]
             yield self.collate_fn(batch)
+    
+    def __len__(self):
+        n_samples = len(self.ds)
+        if self.batch_sampler.drop_last:
+            return n_samples // self.batch_size
+        return (n_samples + self.batch_size - 1) // self.batch_size
+
+    @property
+    def dataset(self):
+        return self.ds
 
 
 
@@ -111,10 +122,10 @@ def create_dataloaders(output_dir, batch_size=32):
 
     train_transform = transforms.Compose([
     transforms.Resize((128, 128)),
-    transforms.RandomHorizontalFlip(),      
-    transforms.RandomRotation(15),          
-    transforms.ColorJitter(                 
-        brightness=0.2, 
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(15),
+    transforms.ColorJitter(
+        brightness=0.2,
         contrast=0.2
     ),
     transforms.ToTensor(),
@@ -123,7 +134,7 @@ def create_dataloaders(output_dir, batch_size=32):
         std=[0.229, 0.224, 0.225]
     )
 ])
-    
+
     val_transform = transforms.Compose([
     transforms.Resize((128, 128)),
     transforms.ToTensor(),
@@ -132,7 +143,7 @@ def create_dataloaders(output_dir, batch_size=32):
         std=[0.229, 0.224, 0.225]
     )
 ])
-    
+
 
     def load_split(split):
         split_dir = os.path.join(output_dir, split)
