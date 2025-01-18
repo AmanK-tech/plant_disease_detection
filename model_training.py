@@ -135,7 +135,7 @@ class Learner:
         for cb in cbs: self.cbs.append(cb)
         try:
             self.n_epochs = n_epochs
-            self.n_epochs = range(n_epochs)
+            self.epochs = range(n_epochs)
             if lr is None: lr = self.lr
             self.opt = self.opt_func(self.model.parameters(), lr)
             self._fit(train, valid)
