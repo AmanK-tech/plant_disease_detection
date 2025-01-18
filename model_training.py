@@ -21,20 +21,29 @@ class CancelEpochException(Exception): pass
 class LenDataLoader:
     def __init__(self, dataloader):
         self.dataloader = dataloader
-        self.dataset_len = len(dataloader.dataset)
+        
+        if hasattr(dataloader, 'dataset'):
+            self.dataset = dataloader.dataset
+            self.dataset_len = len(self.dataset)
+        else:
+            
+            self.dataset = None
+            self.dataset_len = len(dataloader) * dataloader.batch_size
+
         self.batch_size = dataloader.batch_size
         self._length = (self.dataset_len + self.batch_size - 1) // self.batch_size
         
-        self.dataset = dataloader.dataset
-        self.batch_sampler = dataloader.batch_sampler
-        self.sampler = dataloader.sampler
-        self.collate_fn = dataloader.collate_fn
+        
+        self.batch_sampler = getattr(dataloader, 'batch_sampler', None)
+        self.sampler = getattr(dataloader, 'sampler', None)
+        self.collate_fn = getattr(dataloader, 'collate_fn', None)
         
     def __iter__(self):
         return iter(self.dataloader)
     
     def __len__(self):
         return self._length
+
 
 class Callback:
     order = 0
