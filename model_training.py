@@ -120,7 +120,7 @@ class Learner:
 
     def one_epoch(self, training):
         self.model.train(training)
-        self.dl = self.dls.train if training else self.dls.valid
+        self.dl = self.dls['train'] if training else self.dls['valid']
         self._one_epoch()
 
     @with_cbs('fit')
