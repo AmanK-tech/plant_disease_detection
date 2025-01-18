@@ -43,7 +43,6 @@ class Metric:
         return ((tensor(self.vals) * ns).sum() / ns.sum()).item()
     def calc(self, inp, targ): return (inp == targ).float().mean()
 
-# Move data to CPU
 def to_cpu(x):
     if isinstance(x, Mapping): return {k: to_cpu(v) for k, v in x.items()}
     if isinstance(x, (list, tuple)): return type(x)(to_cpu(o) for o in x)
