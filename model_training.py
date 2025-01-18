@@ -21,8 +21,15 @@ class CancelEpochException(Exception): pass
 class LenDataLoader:
     def __init__(self, dataloader):
         self.dataloader = dataloader
-        self._length = len(dataloader.dataset) // dataloader.batch_size + (0 if len(dataloader.dataset) % dataloader.batch_size == 0 else 1)
-    
+        self.dataset_len = len(dataloader.dataset)
+        self.batch_size = dataloader.batch_size
+        self._length = (self.dataset_len + self.batch_size - 1) // self.batch_size
+        
+        self.dataset = dataloader.dataset
+        self.batch_sampler = dataloader.batch_sampler
+        self.sampler = dataloader.sampler
+        self.collate_fn = dataloader.collate_fn
+        
     def __iter__(self):
         return iter(self.dataloader)
     
@@ -37,10 +44,10 @@ def run_cbs(cbs, method_nm, learn=None):
         method = getattr(cb, method_nm, None)
         if method is not None: method(learn)
 
-class CompletionCB(Callback):
-    def before_fit(self, learn): self.count = 0
-    def after_batch(self, learn): self.count += 1
-    def after_fit(self, learn): print(f'Completed {self.count} batches')
+def to_cpu(x):
+    if isinstance(x, Mapping): return {k: to_cpu(v) for k,v in x.items()}
+    if isinstance(x, (list,tuple)): return type(x)(to_cpu(o) for o in x)
+    return x.detach().cpu() if isinstance(x, torch.Tensor) else x
 
 class Metric:
     def __init__(self): self.reset()
@@ -57,11 +64,6 @@ class Metric:
         return ((tensor(self.vals) * ns).sum() / ns.sum()).item()
     
     def calc(self, inp, targ): return (inp == targ).float().mean()
-
-def to_cpu(x):
-    if isinstance(x, Mapping): return {k: to_cpu(v) for k,v in x.items()}
-    if isinstance(x, (list,tuple)): return type(x)(to_cpu(o) for o in x)
-    return x.detach().cpu() if isinstance(x, torch.Tensor) else x
 
 class MetricsCB(Callback):
     def __init__(self, *ms, **metrics):
@@ -121,7 +123,7 @@ class Learner:
                        for k, v in dls.items()}
         elif isinstance(dls, (list, tuple)):
             train_dl = LenDataLoader(dls[0]) if isinstance(dls[0], DataLoader) else dls[0]
-            valid_dl = LenDataLoader(dls[1]) if len(dls) > 1 and isinstance(dls[1], DataLoader) else dls[1] if len(dls) > 1 else None
+            valid_dl = (LenDataLoader(dls[1]) if isinstance(dls[1], DataLoader) else dls[1]) if len(dls) > 1 else None
             self.dls = {'train': train_dl, 'valid': valid_dl}
         else:
             self.dls = {'train': LenDataLoader(dls) if isinstance(dls, DataLoader) else dls, 
@@ -201,7 +203,8 @@ class ProgressCB(Callback):
     def before_fit(self, learn):
         learn.epochs = self.mbar = master_bar(learn.epochs)
         self.first = True
-        if hasattr(learn, 'metrics'): learn.metrics._log = self._log
+        if hasattr(learn, 'metrics'): 
+            learn.metrics._log = self._log
         self.losses, self.val_losses = [], []
     
     def _log(self, d):
@@ -211,17 +214,18 @@ class ProgressCB(Callback):
         self.mbar.write(list(d.values()), table=True)
     
     def before_epoch(self, learn):
-        if isinstance(learn.dl, DataLoader):
+        if not isinstance(learn.dl, LenDataLoader):
             learn.dl = LenDataLoader(learn.dl)
         learn.dl = progress_bar(learn.dl, leave=False, parent=self.mbar)
     
     def after_batch(self, learn):
-        learn.dl.comment = f'{learn.loss:.3f}'
-        if self.plot and learn.training:
-            self.losses.append(learn.loss.item())
+        if hasattr(learn, 'loss'):
+            learn.dl.comment = f'{learn.loss:.3f}'
+            if self.plot and learn.training:
+                self.losses.append(learn.loss.item())
     
     def after_epoch(self, learn):
-        if not learn.training and self.plot:
+        if not learn.training and self.plot and hasattr(learn, 'metrics'):
             self.val_losses.append(learn.metrics.all_metrics['loss'].compute())
             self.mbar.update_graph([self.losses, self.val_losses])
 
@@ -250,3 +254,8 @@ class LRFinderCB(Callback):
         plt.xlabel('Learning Rate')
         plt.ylabel('Loss')
         plt.show()
+
+class CompletionCB(Callback):
+    def before_fit(self, learn): self.count = 0
+    def after_batch(self, learn): self.count += 1
+    def after_fit(self, learn): print(f'Completed {self.count} batches')
