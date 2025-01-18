@@ -207,10 +207,13 @@ class TrainCB(Callback):
 class ProgressCB(Callback):
     order = MetricsCB.order + 1
     
-    def __init__(self, plot=False): self.plot = plot
+    def __init__(self, plot=False): 
+        self.plot = plot
     
     def before_fit(self, learn):
-        learn.epochs = self.mbar = master_bar(learn.epochs)
+        
+        learn.epochs = list(range(learn.n_epochs))
+        self.mbar = master_bar(learn.epochs)
         self.first = True
         if hasattr(learn, 'metrics'): 
             learn.metrics._log = self._log
@@ -225,18 +228,24 @@ class ProgressCB(Callback):
     def before_epoch(self, learn):
         if not isinstance(learn.dl, LenDataLoader):
             learn.dl = LenDataLoader(learn.dl)
-        learn.dl = progress_bar(learn.dl, leave=False, parent=self.mbar)
+        batches = list(range(len(learn.dl)))
+        learn.dl = progress_bar(batches, leave=False, parent=self.mbar)
+        self.iter = iter(learn.dl.iterable)
     
     def after_batch(self, learn):
         if hasattr(learn, 'loss'):
-            learn.dl.comment = f'{learn.loss:.3f}'
+            
+            learn.dl.comment = f'{float(learn.loss):.3f}'
             if self.plot and learn.training:
-                self.losses.append(learn.loss.item())
+                self.losses.append(float(learn.loss))
     
     def after_epoch(self, learn):
         if not learn.training and self.plot and hasattr(learn, 'metrics'):
-            self.val_losses.append(learn.metrics.all_metrics['loss'].compute())
-            self.mbar.update_graph([self.losses, self.val_losses])
+            val_loss = learn.metrics.all_metrics['loss'].compute()
+            self.val_losses.append(float(val_loss))
+            if hasattr(self.mbar, 'update_graph'):
+                self.mbar.update_graph([[i, l] for i, l in enumerate(self.losses)],
+                                     [[i, l] for i, l in enumerate(self.val_losses)])
 
 class LRFinderCB(Callback):
     def __init__(self, gamma=1.3, max_mult=3): 
