@@ -21,26 +21,26 @@ class CancelEpochException(Exception): pass
 class LenDataLoader:
     def __init__(self, dataloader):
         self.dataloader = dataloader
-        
+
         if hasattr(dataloader, 'dataset'):
             self.dataset = dataloader.dataset
             self.dataset_len = len(self.dataset)
         else:
-            
+
             self.dataset = None
             self.dataset_len = len(dataloader) * dataloader.batch_size
 
         self.batch_size = dataloader.batch_size
         self._length = (self.dataset_len + self.batch_size - 1) // self.batch_size
-        
-        
+
+
         self.batch_sampler = getattr(dataloader, 'batch_sampler', None)
         self.sampler = getattr(dataloader, 'sampler', None)
         self.collate_fn = getattr(dataloader, 'collate_fn', None)
-        
+
     def __iter__(self):
         return iter(self.dataloader)
-    
+
     def __len__(self):
         return self._length
 
@@ -61,17 +61,17 @@ def to_cpu(x):
 class Metric:
     def __init__(self): self.reset()
     def reset(self): self.vals, self.ns = [], []
-    
+
     def add(self, inp, targ=None, n=1):
         self.last = self.calc(inp, targ)
         self.vals.append(self.last)
         self.ns.append(n)
-    
+
     @property
     def value(self):
         ns = tensor(self.ns)
         return ((tensor(self.vals) * ns).sum() / ns.sum()).item()
-    
+
     def calc(self, inp, targ): return (inp == targ).float().mean()
 
 class MetricsCB(Callback):
@@ -84,13 +84,13 @@ class MetricsCB(Callback):
     def _log(self, d): print(d)
     def before_fit(self, learn): learn.metrics = self
     def before_epoch(self, learn): [m.reset() for m in self.all_metrics.values()]
-    
+
     def after_epoch(self, learn):
         log = {k: f'{v.compute():.3f}' for k,v in self.all_metrics.items()}
         log['epoch'] = learn.epoch
         log['train'] = 'train' if learn.training else 'eval'
         self._log(log)
-    
+
     def after_batch(self, learn):
         x,y,*_ = to_cpu(learn.batch)
         for m in self.metrics.values():
@@ -124,20 +124,20 @@ class with_cbs:
 class Learner:
     def __init__(self, model, dls=None, loss_func=F.mse_loss, lr=0.1, cbs=None, opt_func=optim.Adam):
         self.model = model
-        
+
         if dls is None:
             self.dls = {'train': None, 'valid': None}
         elif isinstance(dls, dict):
-            self.dls = {k: LenDataLoader(v) if isinstance(v, DataLoader) else v 
+            self.dls = {k: LenDataLoader(v) if isinstance(v, DataLoader) else v
                        for k, v in dls.items()}
         elif isinstance(dls, (list, tuple)):
             train_dl = LenDataLoader(dls[0]) if isinstance(dls[0], DataLoader) else dls[0]
             valid_dl = (LenDataLoader(dls[1]) if isinstance(dls[1], DataLoader) else dls[1]) if len(dls) > 1 else None
             self.dls = {'train': train_dl, 'valid': valid_dl}
         else:
-            self.dls = {'train': LenDataLoader(dls) if isinstance(dls, DataLoader) else dls, 
+            self.dls = {'train': LenDataLoader(dls) if isinstance(dls, DataLoader) else dls,
                        'valid': None}
-            
+
         self.loss_func = loss_func
         self.lr = lr
         self.cbs = fc.L([] if cbs is None else cbs)
@@ -192,7 +192,7 @@ class Learner:
         raise AttributeError(name)
 
     def callback(self, method_nm): run_cbs(self.cbs, method_nm, self)
-    
+
     @property
     def training(self): return self.model.training
 
@@ -204,57 +204,62 @@ class TrainCB(Callback):
     def step(self, learn): learn.opt.step()
     def zero_grad(self, learn): learn.opt.zero_grad()
 
-class ProgressCB(Callback):
+class SimpleProgressCB(Callback):
     order = MetricsCB.order + 1
     
-    def __init__(self, plot=False): 
+    def __init__(self, plot=False):
         self.plot = plot
+        self.losses = []
+        self.val_losses = []
     
     def before_fit(self, learn):
-        learn.epochs = list(range(learn.n_epochs))
-        self.mbar = master_bar(learn.epochs)
-        self.first = True
-        if hasattr(learn, 'metrics'): 
-            learn.metrics._log = self._log
-        self.losses, self.val_losses = [], []
-    
-    def _log(self, d):
-        if self.first:
-            self.mbar.write(list(d), table=True)
-            self.first = False
-        self.mbar.write(list(d.values()), table=True)
+        self.n_epochs = learn.n_epochs
+        print(f'Starting training for {self.n_epochs} epochs')
     
     def before_epoch(self, learn):
         if not isinstance(learn.dl, LenDataLoader):
             learn.dl = LenDataLoader(learn.dl)
-        
-        self.orig_dl = learn.dl
-        learn.dl = progress_bar(learn.dl, leave=False, parent=self.mbar)
+        self.n_batches = len(learn.dl)
+        self.current_batch = 0
+        print(f'\nEpoch {learn.epoch+1}/{self.n_epochs}')
     
     def after_batch(self, learn):
+        self.current_batch += 1
         if hasattr(learn, 'loss'):
-            learn.dl.comment = f'{float(learn.loss):.3f}'
-            if self.plot and learn.training:
-                self.losses.append(float(learn.loss))
+            loss_value = float(learn.loss)
+            if learn.training:
+                self.losses.append(loss_value)
+                if self.current_batch % 10 == 0:  
+                    print(f'Batch {self.current_batch}/{self.n_batches}, Loss: {loss_value:.4f}')
     
     def after_epoch(self, learn):
-        learn.dl = self.orig_dl
-        if not learn.training and self.plot and hasattr(learn, 'metrics'):
+        if not learn.training and hasattr(learn, 'metrics'):
             val_loss = learn.metrics.all_metrics['loss'].compute()
             self.val_losses.append(float(val_loss))
-            if hasattr(self.mbar, 'update_graph'):
-                self.mbar.update_graph([[i, l] for i, l in enumerate(self.losses)],
-                                     [[i, l] for i, l in enumerate(self.val_losses)])
+            print(f'Validation Loss: {float(val_loss):.4f}')
+            
+        if self.plot and len(self.losses) > 0:
+            plt.figure(figsize=(10, 5))
+            plt.plot(self.losses, label='Training Loss')
+            if len(self.val_losses) > 0:
+                epochs = range(len(self.val_losses))
+                plt.plot(epochs, self.val_losses, label='Validation Loss')
+            plt.xlabel('Iterations')
+            plt.ylabel('Loss')
+            plt.legend()
+            plt.show()
+
+
 
 class LRFinderCB(Callback):
-    def __init__(self, gamma=1.3, max_mult=3): 
+    def __init__(self, gamma=1.3, max_mult=3):
         self.gamma,self.max_mult = gamma,max_mult
-    
+
     def before_fit(self, learn):
         self.sched = ExponentialLR(learn.opt, self.gamma)
         self.lrs,self.losses = [],[]
         self.min = math.inf
-    
+
     def after_batch(self, learn):
         if not learn.training: raise CancelEpochException()
         self.lrs.append(learn.opt.param_groups[0]['lr'])
@@ -264,7 +269,7 @@ class LRFinderCB(Callback):
         if math.isnan(loss) or loss > self.min * self.max_mult:
             raise CancelFitException()
         self.sched.step()
-    
+
     def cleanup_fit(self, learn):
         plt.plot(self.lrs, self.losses)
         plt.xscale('log')
