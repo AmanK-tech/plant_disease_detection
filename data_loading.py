@@ -5,16 +5,16 @@ import shutil
 import torch
 from torchvision import transforms
 from sklearn.model_selection import train_test_split
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 def collate(batch):
+    batch = [b for b in batch if b is not None]
+    if not batch:
+        return None, None
     inputs, labels = zip(*batch)
     inputs = torch.stack(inputs)
     labels = torch.tensor(labels, dtype=torch.long)
     return inputs, labels
-
-
-
 
 class CustomDataset:
     def __init__(self, x, y, transform=None):
@@ -29,12 +29,14 @@ class CustomDataset:
 
     def __getitem__(self, i):
         image_path, label = self.x[i], self.y[i]
-        image = Image.open(image_path).convert('RGB')
-        if self.transform:
-            image = self.transform(image)
-        return image, label
-
-
+        try:
+            image = Image.open(image_path).convert('RGB')
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+        except (UnidentifiedImageError, OSError, Exception) as e:
+            print(f"Error loading image {image_path}: {str(e)}")
+            return None
 
 class Sampler:
     def __init__(self, ds, shuffle=False):
@@ -46,7 +48,6 @@ class Sampler:
         if self.shuffle:
             random.shuffle(indices)
         return iter(indices)
-
 
 class BatchSampler:
     def __init__(self, sampler, batch_size, drop_last=False):
@@ -64,7 +65,6 @@ class BatchSampler:
         if batch and not self.drop_last:
             yield batch
 
-
 class DataLoader:
     def __init__(self, ds, batch_sampler, collate_fn=None):
         self.ds = ds
@@ -74,9 +74,16 @@ class DataLoader:
 
     def __iter__(self):
         for batch_indices in self.batch_sampler:
-            batch = [self.ds[i] for i in batch_indices]
-            yield self.collate_fn(batch)
-    
+            batch = []
+            for i in batch_indices:
+                item = self.ds[i]
+                if item is not None:  
+                    batch.append(item)
+            if batch:  
+                collated = self.collate_fn(batch)
+                if collated[0] is not None:  
+                    yield collated
+
     def __len__(self):
         n_samples = len(self.ds)
         if self.batch_sampler.drop_last:
@@ -87,7 +94,13 @@ class DataLoader:
     def dataset(self):
         return self.ds
 
-
+def validate_image(image_path):
+    try:
+        with Image.open(image_path) as img:
+            img.verify()
+        return True
+    except:
+        return False
 
 def split_dataset(data_dir, output_dir, train_ratio=0.7, val_ratio=0.2, test_ratio=0.1):
     assert abs(train_ratio + val_ratio + test_ratio - 1) < 1e-6
@@ -101,7 +114,17 @@ def split_dataset(data_dir, output_dir, train_ratio=0.7, val_ratio=0.2, test_rat
         if not os.path.isdir(class_dir):
             continue
 
-        images = [f for f in os.listdir(class_dir) if os.path.isfile(os.path.join(class_dir, f))]
+        images = []
+        for f in os.listdir(class_dir):
+            file_path = os.path.join(class_dir, f)
+            if os.path.isfile(file_path) and validate_image(file_path):
+                images.append(f)
+            else:
+                print(f"Skipping invalid image: {file_path}")
+
+        if not images:
+            print(f"Warning: No valid images found in {class_dir}")
+            continue
 
         train_imgs, temp_imgs = train_test_split(images, test_size=(val_ratio + test_ratio), random_state=42)
         val_imgs, test_imgs = train_test_split(temp_imgs, test_size=(test_ratio / (val_ratio + test_ratio)), random_state=42)
@@ -117,33 +140,30 @@ def split_dataset(data_dir, output_dir, train_ratio=0.7, val_ratio=0.2, test_rat
 
     print(f"Dataset split into train, val, and test sets at: {output_dir}")
 
-
 def create_dataloaders(output_dir, batch_size=32):
-
     train_transform = transforms.Compose([
-    transforms.Resize((128, 128)),
-    transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(15),
-    transforms.ColorJitter(
-        brightness=0.2,
-        contrast=0.2
-    ),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    )
-])
+        transforms.Resize((128, 128)),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(15),
+        transforms.ColorJitter(
+            brightness=0.2,
+            contrast=0.2
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
+    ])
 
     val_transform = transforms.Compose([
-    transforms.Resize((128, 128)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    )
-])
-
+        transforms.Resize((128, 128)),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
+    ])
 
     def load_split(split):
         split_dir = os.path.join(output_dir, split)
@@ -154,8 +174,12 @@ def create_dataloaders(output_dir, batch_size=32):
             if not os.path.isdir(class_dir):
                 continue
             for img_file in os.listdir(class_dir):
-                image_paths.append(os.path.join(class_dir, img_file))
-                labels.append(class_name)
+                img_path = os.path.join(class_dir, img_file)
+                if validate_image(img_path):
+                    image_paths.append(img_path)
+                    labels.append(class_name)
+                else:
+                    print(f"Skipping invalid image during dataloader creation: {img_path}")
         return image_paths, labels
 
     train_paths, train_labels = load_split('train')
@@ -170,15 +194,8 @@ def create_dataloaders(output_dir, batch_size=32):
     val_sampler = BatchSampler(Sampler(val_dataset, shuffle=False), batch_size)
     test_sampler = BatchSampler(Sampler(test_dataset, shuffle=False), batch_size)
 
-    train_loader = DataLoader(train_dataset, train_sampler,collate_fn=collate)
-    val_loader = DataLoader(val_dataset, val_sampler,collate_fn=collate)
+    train_loader = DataLoader(train_dataset, train_sampler, collate_fn=collate)
+    val_loader = DataLoader(val_dataset, val_sampler, collate_fn=collate)
     test_loader = DataLoader(test_dataset, test_sampler, collate_fn=collate)
 
     return train_loader, val_loader, test_loader
-
-
-
-
-
-
-
