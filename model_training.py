@@ -211,6 +211,10 @@ class SimpleProgressCB(Callback):
         self.plot = plot
         self.losses = []
         self.val_losses = []
+        self.epoch_loss = 0
+        self.epoch_correct = 0
+        self.epoch_total = 0
+        self.batch_count = 0
     
     def before_fit(self, learn):
         self.n_epochs = learn.n_epochs
@@ -219,35 +223,34 @@ class SimpleProgressCB(Callback):
     def before_epoch(self, learn):
         if not isinstance(learn.dl, LenDataLoader):
             learn.dl = LenDataLoader(learn.dl)
-        self.n_batches = len(learn.dl)
-        self.current_batch = 0
-        print(f'\nEpoch {learn.epoch+1}/{self.n_epochs}')
+        self.epoch_loss = 0
+        self.epoch_correct = 0
+        self.epoch_total = 0
+        self.batch_count = 0
     
     def after_batch(self, learn):
-        self.current_batch += 1
         if hasattr(learn, 'loss'):
-            loss_value = float(learn.loss)
-            if learn.training:
-                self.losses.append(loss_value)
-                if self.current_batch % 10 == 0:  
-                    print(f'Batch {self.current_batch}/{self.n_batches}, Loss: {loss_value:.4f}')
-    
+            self.epoch_loss += float(learn.loss)
+            self.batch_count += 1
+            
+            
+            preds = learn.preds.argmax(dim=1)
+            targets = learn.batch[1]  
+            self.epoch_correct += (preds == targets).sum().item()
+            self.epoch_total += targets.size(0)
+            
     def after_epoch(self, learn):
+        avg_loss = self.epoch_loss / self.batch_count
+        accuracy = (self.epoch_correct / self.epoch_total) * 100
+        
+        if learn.training:
+            print(f'Epoch {learn.epoch+1}/{self.n_epochs}:')
+            print(f'Training Loss: {avg_loss:.4f}, Training Accuracy: {accuracy:.2f}%')
+        
         if not learn.training and hasattr(learn, 'metrics'):
             val_loss = learn.metrics.all_metrics['loss'].compute()
-            self.val_losses.append(float(val_loss))
-            print(f'Validation Loss: {float(val_loss):.4f}')
-            
-        if self.plot and len(self.losses) > 0:
-            plt.figure(figsize=(10, 5))
-            plt.plot(self.losses, label='Training Loss')
-            if len(self.val_losses) > 0:
-                epochs = range(len(self.val_losses))
-                plt.plot(epochs, self.val_losses, label='Validation Loss')
-            plt.xlabel('Iterations')
-            plt.ylabel('Loss')
-            plt.legend()
-            plt.show()
+            val_acc = self.epoch_correct / self.epoch_total * 100
+            print(f'Validation Loss: {float(val_loss):.4f}, Validation Accuracy: {val_acc:.2f}%\n')
 
 
 
