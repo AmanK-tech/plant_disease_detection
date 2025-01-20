@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 import math
 from torch.utils.data import DataLoader
 
-# Exception classes for control flow
 class CancelFitException(Exception): pass
 class CancelBatchException(Exception): pass
 class CancelEpochException(Exception): pass
@@ -111,6 +110,17 @@ class MetricsCB(Callback):
         log['train'] = 'train' if learn.training else 'eval'
         self._log(log)
 
+def to_device(data, device):
+    if isinstance(data, torch.Tensor):
+        return data.to(device)
+    elif isinstance(data, (list, tuple)):
+        return type(data)(to_device(d, device) for d in data)
+    elif isinstance(data, dict):
+        return {k: to_device(v, device) for k, v in data.items()}
+    else:
+        return data
+
+
 class DeviceCB(Callback):
     order = 0
     
@@ -165,7 +175,7 @@ class Learner:
         
         self.loss_func = loss_func
         self.lr = lr
-        self.cbs = fc.L([MetricsCB(), DeviceCB()])  # Default callbacks
+        self.cbs = fc.L([MetricsCB(), DeviceCB()])  
         if cbs is not None:
             self.cbs.extend(cbs)
         self.opt_func = opt_func
