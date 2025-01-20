@@ -21,26 +21,29 @@ class CancelEpochException(Exception): pass
 class LenDataLoader:
     def __init__(self, dataloader):
         self.dataloader = dataloader
-        
+
         if hasattr(dataloader, 'dataset'):
             self.dataset = dataloader.dataset
             self.dataset_len = len(self.dataset)
         else:
+
             self.dataset = None
             self.dataset_len = len(dataloader) * dataloader.batch_size
-        
+
         self.batch_size = dataloader.batch_size
         self._length = (self.dataset_len + self.batch_size - 1) // self.batch_size
-        
+
+
         self.batch_sampler = getattr(dataloader, 'batch_sampler', None)
         self.sampler = getattr(dataloader, 'sampler', None)
         self.collate_fn = getattr(dataloader, 'collate_fn', None)
-    
+
     def __iter__(self):
         return iter(self.dataloader)
-    
+
     def __len__(self):
         return self._length
+
 
 class Callback:
     order = 0
@@ -56,76 +59,59 @@ def to_cpu(x):
     return x.detach().cpu() if isinstance(x, torch.Tensor) else x
 
 class Metric:
-    def __init__(self): 
-        self.reset()
-    
-    def reset(self): 
-        self.vals, self.ns = [], []
-        self.total = 0
-        self.count = 0
-    
-    def update(self, val, n=1):
-        self.total += val * n
-        self.count += n
-        self.vals.append(val)
-        self.ns.append(n)
-    
-    def compute(self):
-        return self.total / self.count if self.count > 0 else 0.0
+    def __init__(self): self.reset()
+    def reset(self): self.vals, self.ns = [], []
 
-class AccuracyMetric(Metric):
-    def update(self, preds, targets):
-        correct = (preds.argmax(dim=1) == targets).float().sum().item()
-        total = targets.numel()
-        super().update(correct / total, total)
+    def add(self, inp, targ=None, n=1):
+        self.last = self.calc(inp, targ)
+        self.vals.append(self.last)
+        self.ns.append(n)
+
+    @property
+    def value(self):
+        ns = tensor(self.ns)
+        return ((tensor(self.vals) * ns).sum() / ns.sum()).item()
+
+    def calc(self, inp, targ): return (inp == targ).float().mean()
 
 class MetricsCB(Callback):
-    def __init__(self, metrics=None):
-        self.metrics = {} if metrics is None else metrics
-        self.all_metrics = copy(self.metrics)
-        self.all_metrics['loss'] = Mean()
-        self.all_metrics['accuracy'] = AccuracyMetric()
-    
+    def __init__(self, *ms, **metrics):
+        for m in ms: metrics[m.__class__.__name__] = m
+        self.metrics = metrics
+        self.all_metrics = copy(metrics)
+        self.all_metrics['loss'] = self.loss = Mean()
+
     def _log(self, d):
         phase = 'Training' if d['train'] == 'train' else 'Validation'
-        metrics_str = ', '.join(f"{k.title()}: {v:.4f}" for k, v in d.items() 
+        metrics_str = ', '.join(f"{k.title()}: {v}" for k, v in d.items() 
                               if k not in ['epoch', 'train'])
-        print(f"{phase:<10} - {metrics_str}")
-    
-    def before_fit(self, learn): 
-        learn.metrics = self
-    
-    def before_epoch(self, learn): 
-        [m.reset() for m in self.all_metrics.values()]
-    
-    def after_batch(self, learn):
-        if hasattr(learn, 'loss'):
-            self.all_metrics['loss'].update(learn.loss.item())
-        if hasattr(learn, 'preds'):
-            self.all_metrics['accuracy'].update(learn.preds, learn.batch[1])
-    
+        print(f"{phase} - {metrics_str}")
+
+    def before_fit(self, learn): learn.metrics = self
+    def before_epoch(self, learn): [m.reset() for m in self.all_metrics.values()]
+
     def after_epoch(self, learn):
-        log = {k: v.compute() for k,v in self.all_metrics.items()}
+        log = {k: f'{v.compute():.3f}' for k,v in self.all_metrics.items()}
         log['epoch'] = learn.epoch
         log['train'] = 'train' if learn.training else 'eval'
         self._log(log)
 
-def to_device(data, device):
-    if isinstance(data, torch.Tensor):
-        return data.to(device)
-    elif isinstance(data, (list, tuple)):
-        return type(data)(to_device(d, device) for d in data)
-    elif isinstance(data, dict):
-        return {k: to_device(v, device) for k, v in data.items()}
-    else:
-        return data
+default_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+def to_device(obj, device):
+    if isinstance(obj, (list,tuple)): return [to_device(o,device) for o in obj]
+    if isinstance(obj, dict): return {k: to_device(v,device) for k,v in obj.items()}
+    return obj.to(device) if hasattr(obj,'to') else obj
 
 class DeviceCB(Callback):
-    order = 0
+    order = 0  
     
     def __init__(self, device=None):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if device is None else device
+        if device is None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = device
+        
         
         if self.device.type == 'cuda':
             print(f"\nUsing GPU: {torch.cuda.get_device_name(0)}")
@@ -134,7 +120,9 @@ class DeviceCB(Callback):
             print("\nNo GPU available, using CPU")
     
     def before_fit(self, learn):
+        
         learn.model.to(self.device)
+        
         if hasattr(learn, 'opt'):
             for state in learn.opt.state.values():
                 for k, v in state.items():
@@ -142,7 +130,17 @@ class DeviceCB(Callback):
                         state[k] = v.to(self.device)
     
     def before_batch(self, learn):
-        learn.batch = to_device(learn.batch, self.device)
+        
+        if isinstance(learn.batch, (list, tuple)):
+            learn.batch = [b.to(self.device) if isinstance(b, torch.Tensor) else b 
+                          for b in learn.batch]
+        else:
+            learn.batch = learn.batch.to(self.device)
+    
+    def before_epoch(self, learn):
+        
+        if next(learn.model.parameters()).device != self.device:
+            learn.model.to(self.device)
 
 class with_cbs:
     def __init__(self, nm): self.nm = nm
@@ -157,9 +155,9 @@ class with_cbs:
         return _f
 
 class Learner:
-    def __init__(self, model, dls=None, loss_func=F.cross_entropy, lr=0.1, cbs=None, opt_func=optim.Adam):
+    def __init__(self, model, dls=None, loss_func=F.mse_loss, lr=0.1, cbs=None, opt_func=optim.Adam):
         self.model = model
-        
+
         if dls is None:
             self.dls = {'train': None, 'valid': None}
         elif isinstance(dls, dict):
@@ -172,14 +170,12 @@ class Learner:
         else:
             self.dls = {'train': LenDataLoader(dls) if isinstance(dls, DataLoader) else dls,
                        'valid': None}
-        
+
         self.loss_func = loss_func
         self.lr = lr
-        self.cbs = fc.L([MetricsCB(), DeviceCB()])  
-        if cbs is not None:
-            self.cbs.extend(cbs)
+        self.cbs = fc.L([] if cbs is None else cbs)
         self.opt_func = opt_func
-    
+
     @with_cbs('batch')
     def _one_batch(self):
         self.predict()
@@ -192,25 +188,25 @@ class Learner:
             self.step()
             self.callback('after_step')
             self.zero_grad()
-    
+
     @with_cbs('epoch')
     def _one_epoch(self):
         for self.iter,self.batch in enumerate(self.dl):
             self._one_batch()
-    
+
     def one_epoch(self, training):
         self.model.train(training)
         self.dl = self.dls['train'] if training else self.dls['valid']
         if self.dl is not None:
             self._one_epoch()
-    
+
     @with_cbs('fit')
     def _fit(self, train, valid):
         for self.epoch in range(self.n_epochs):
             if train: self.one_epoch(True)
             if valid and self.dls['valid'] is not None:
                 with torch.no_grad(): self.one_epoch(False)
-    
+
     def fit(self, n_epochs=1, train=True, valid=True, cbs=None, lr=None):
         cbs = fc.L([] if cbs is None else cbs)
         for cb in cbs: self.cbs.append(cb)
@@ -222,89 +218,140 @@ class Learner:
             self._fit(train, valid)
         finally:
             for cb in cbs: self.cbs.remove(cb)
-    
+
     def __getattr__(self, name):
         if name in ('predict','get_loss','backward','step','zero_grad'):
             return partial(self.callback, name)
         raise AttributeError(name)
-    
-    def callback(self, method_nm): 
-        run_cbs(self.cbs, method_nm, self)
-    
+
+    def callback(self, method_nm): run_cbs(self.cbs, method_nm, self)
+
     @property
-    def training(self): 
-        return self.model.training
+    def training(self): return self.model.training
 
 class TrainCB(Callback):
-    def __init__(self, n_inp=1): 
-        self.n_inp = n_inp
-    
-    def predict(self, learn): 
-        learn.preds = learn.model(*learn.batch[:self.n_inp])
-    
-    def get_loss(self, learn): 
-        learn.loss = learn.loss_func(learn.preds, learn.batch[self.n_inp])
-    
-    def backward(self, learn): 
-        learn.loss.backward()
-    
-    def step(self, learn): 
-        learn.opt.step()
-    
-    def zero_grad(self, learn): 
-        learn.opt.zero_grad()
+    def __init__(self, n_inp=1): self.n_inp = n_inp
+    def predict(self, learn): learn.preds = learn.model(*learn.batch[:self.n_inp])
+    def get_loss(self, learn): learn.loss = learn.loss_func(learn.preds, *learn.batch[self.n_inp:])
+    def backward(self, learn): learn.loss.backward()
+    def step(self, learn): learn.opt.step()
+    def zero_grad(self, learn): learn.opt.zero_grad()
 
-class ProgressCallback(Callback):
+class SimpleProgressCB(Callback):
     order = MetricsCB.order + 1
     
-    def __init__(self, plot=True):
+    def __init__(self, plot=False):
         self.plot = plot
-        self.train_losses = []
-        self.valid_losses = []
-        self.train_accs = []
-        self.valid_accs = []
+        self.losses = []
+        self.val_losses = []
+        self.accuracies = []
+        self.val_accuracies = []
+        self.epoch_loss = 0
+        self.epoch_correct = 0
+        self.epoch_total = 0
+        self.batch_count = 0
     
     def before_fit(self, learn):
-        print(f"\nStarting training for {learn.n_epochs} epochs\n")
+        self.n_epochs = learn.n_epochs
+        print("\n" + "="*80)
+        print(f"Starting training for {self.n_epochs} epochs")
+        print("="*80 + "\n")
     
-    def after_epoch(self, learn):
-        if hasattr(learn, 'metrics'):
-            metrics = learn.metrics.all_metrics
-            loss = metrics['loss'].compute()
-            acc = metrics['accuracy'].compute()
+    def before_epoch(self, learn):
+        if not isinstance(learn.dl, LenDataLoader):
+            learn.dl = LenDataLoader(learn.dl)
+        self.epoch_loss = 0
+        self.epoch_correct = 0
+        self.epoch_total = 0
+        self.batch_count = 0
+        if learn.training:
+            print(f"\nEpoch {learn.epoch+1}/{self.n_epochs}")
+            print("-"*40)
+    
+    def after_batch(self, learn):
+        if hasattr(learn, 'loss'):
+            self.epoch_loss += float(learn.loss)
+            self.batch_count += 1
             
-            if learn.training:
-                self.train_losses.append(loss)
-                self.train_accs.append(acc)
-            else:
-                self.valid_losses.append(loss)
-                self.valid_accs.append(acc)
+            preds = learn.preds.argmax(dim=1)
+            targets = learn.batch[1]  
+            self.epoch_correct += (preds == targets).sum().item()
+            self.epoch_total += targets.size(0)
+            
+    def after_epoch(self, learn):
+        avg_loss = self.epoch_loss / self.batch_count
+        accuracy = (self.epoch_correct / self.epoch_total) * 100
         
-        if self.plot and learn.epoch == learn.n_epochs-1:
+        if learn.training:
+            self.losses.append(avg_loss)
+            self.accuracies.append(accuracy)
+            print(f"Training   - Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%")
+        
+        if not learn.training and hasattr(learn, 'metrics'):
+            val_loss = learn.metrics.all_metrics['loss'].compute()
+            val_acc = self.epoch_correct / self.epoch_total * 100
+            self.val_losses.append(float(val_loss))
+            self.val_accuracies.append(val_acc)
+            print(f"Validation - Loss: {float(val_loss):.4f}, Accuracy: {val_acc:.2f}%")
+            print("-"*40)
+        
+        if self.plot and learn.epoch == self.n_epochs-1:
             self._plot_metrics()
     
     def _plot_metrics(self):
-        epochs = range(1, len(self.train_losses) + 1)
+        epochs = range(1, len(self.losses) + 1)
         
         plt.figure(figsize=(12, 4))
         
+        
         plt.subplot(1, 2, 1)
-        plt.plot(epochs, self.train_losses, 'b-', label='Training Loss')
-        if self.valid_losses:
-            plt.plot(epochs, self.valid_losses, 'r-', label='Validation Loss')
+        plt.plot(epochs, self.losses, 'b-', label='Training Loss')
+        plt.plot(epochs, self.val_losses, 'r-', label='Validation Loss')
         plt.title('Training and Validation Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
         plt.legend()
         
+        
         plt.subplot(1, 2, 2)
-        plt.plot(epochs, self.train_accs, 'b-', label='Training Accuracy')
-        if self.valid_accs:
-            plt.plot(epochs, self.valid_accs, 'r-', label='Validation Accuracy')
+        plt.plot(epochs, self.accuracies, 'b-', label='Training Accuracy')
+        plt.plot(epochs, self.val_accuracies, 'r-', label='Validation Accuracy')
         plt.title('Training and Validation Accuracy')
         plt.xlabel('Epoch')
-        plt.ylabel('Accuracy')
+        plt.ylabel('Accuracy (%)')
         plt.legend()
         
         plt.tight_layout()
         plt.show()
+
+
+class LRFinderCB(Callback):
+    def __init__(self, gamma=1.3, max_mult=3):
+        self.gamma,self.max_mult = gamma,max_mult
+
+    def before_fit(self, learn):
+        self.sched = ExponentialLR(learn.opt, self.gamma)
+        self.lrs,self.losses = [],[]
+        self.min = math.inf
+
+    def after_batch(self, learn):
+        if not learn.training: raise CancelEpochException()
+        self.lrs.append(learn.opt.param_groups[0]['lr'])
+        loss = to_cpu(learn.loss).item()
+        self.losses.append(loss)
+        if loss < self.min: self.min = loss
+        if math.isnan(loss) or loss > self.min * self.max_mult:
+            raise CancelFitException()
+        self.sched.step()
+
+    def cleanup_fit(self, learn):
+        plt.plot(self.lrs, self.losses)
+        plt.xscale('log')
+        plt.xlabel('Learning Rate')
+        plt.ylabel('Loss')
+        plt.show()
+
+class CompletionCB(Callback):
+    def before_fit(self, learn): self.count = 0
+    def after_batch(self, learn): self.count += 1
+    def after_fit(self, learn): print(f'Completed {self.count} batches')
