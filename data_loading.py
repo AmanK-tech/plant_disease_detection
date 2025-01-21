@@ -204,7 +204,7 @@ def split_dataset(data_dir, output_dir, train_ratio=0.7, val_ratio=0.2, test_rat
 
 def create_dataloaders(output_dir, batch_size=32, num_workers=4):
     train_transform = transforms.Compose([
-        transforms.Resize((96,96)),  
+        transforms.Resize((128,128)),  
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(15),
         transforms.ColorJitter(
@@ -219,7 +219,7 @@ def create_dataloaders(output_dir, batch_size=32, num_workers=4):
     ])
 
     val_transform = transforms.Compose([
-        transforms.Resize((96, 96)),  
+        transforms.Resize((128,128)),  
         transforms.ToTensor(),
         transforms.Normalize(
             mean=[0.485, 0.456, 0.406],
