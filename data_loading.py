@@ -6,6 +6,11 @@ import torch
 from torchvision import transforms
 from sklearn.model_selection import train_test_split
 from PIL import Image, UnidentifiedImageError
+from concurrent.futures import ThreadPoolExecutor
+import queue
+import threading
+from typing import Optional, List, Tuple
+import numpy as np
 
 def collate(batch):
     batch = [b for b in batch if b is not None]
@@ -23,14 +28,22 @@ class CustomDataset:
         self.transform = transform
         self.label_to_idx = {label: idx for idx, label in enumerate(set(y))}
         self.y = [self.label_to_idx[label] for label in y]
-
+        self.cache = {}  
+        
     def __len__(self):
         return len(self.x)
 
     def __getitem__(self, i):
         image_path, label = self.x[i], self.y[i]
         try:
-            image = Image.open(image_path).convert('RGB')
+            if image_path in self.cache:
+                image = self.cache[image_path]
+            else:
+                image = Image.open(image_path).convert('RGB')
+                
+                if len(self.cache) < 1000:  
+                    self.cache[image_path] = image
+            
             if self.transform:
                 image = self.transform(image)
             return image, label
@@ -39,14 +52,16 @@ class CustomDataset:
             return None
 
 class Sampler:
-    def __init__(self, ds, shuffle=False):
+    def __init__(self, ds, shuffle=False, seed=None):
         self.n = len(ds)
         self.shuffle = shuffle
+        self.seed = seed
+        self._rng = np.random.RandomState(seed) if seed is not None else np.random
 
     def __iter__(self):
-        indices = list(range(self.n))
+        indices = np.arange(self.n)
         if self.shuffle:
-            random.shuffle(indices)
+            self._rng.shuffle(indices)
         return iter(indices)
 
 class BatchSampler:
@@ -57,7 +72,7 @@ class BatchSampler:
 
     def __iter__(self):
         batch = []
-        for idx in iter(self.sampler):
+        for idx in self.sampler:
             batch.append(idx)
             if len(batch) == self.batch_size:
                 yield batch
@@ -66,23 +81,70 @@ class BatchSampler:
             yield batch
 
 class DataLoader:
-    def __init__(self, ds, batch_sampler, collate_fn=None):
+    def __init__(self, ds, batch_sampler, collate_fn=None, num_workers=4, prefetch_factor=2):
         self.ds = ds
         self.batch_sampler = batch_sampler
         self.collate_fn = collate_fn or (lambda x: x)
         self.batch_size = batch_sampler.batch_size
+        self.num_workers = num_workers
+        self.prefetch_factor = prefetch_factor
+        self.queue_size = max(1, num_workers * prefetch_factor)
+        
+        if num_workers > 0:
+            self.thread_pool = ThreadPoolExecutor(max_workers=num_workers)
+            self.data_queue = queue.Queue(maxsize=self.queue_size)
+        else:
+            self.thread_pool = None
+            self.data_queue = None
+
+    def _load_batch(self, batch_indices):
+        batch = []
+        for i in batch_indices:
+            item = self.ds[i]
+            if item is not None:
+                batch.append(item)
+        if batch:
+            return self.collate_fn(batch)
+        return None, None
+
+    def _prefetch_worker(self, batch_indices):
+        try:
+            batch_data = self._load_batch(batch_indices)
+            if batch_data[0] is not None:
+                self.data_queue.put(batch_data)
+        except Exception as e:
+            print(f"Error in worker thread: {str(e)}")
 
     def __iter__(self):
-        for batch_indices in self.batch_sampler:
-            batch = []
-            for i in batch_indices:
-                item = self.ds[i]
-                if item is not None:  
-                    batch.append(item)
-            if batch:  
-                collated = self.collate_fn(batch)
-                if collated[0] is not None:  
-                    yield collated
+        if self.num_workers == 0:
+            for batch_indices in self.batch_sampler:
+                batch_data = self._load_batch(batch_indices)
+                if batch_data[0] is not None:
+                    yield batch_data
+        else:
+            try:
+                futures = []
+                for batch_indices in self.batch_sampler:
+                    future = self.thread_pool.submit(self._prefetch_worker, batch_indices)
+                    futures.append(future)
+                    
+                    while self.data_queue.qsize() >= self.queue_size:
+                        batch_data = self.data_queue.get()
+                        yield batch_data
+
+                for _ in futures:
+                    if not self.data_queue.empty():
+                        batch_data = self.data_queue.get()
+                        yield batch_data
+                        
+            except Exception as e:
+                print(f"Error in data loading: {str(e)}")
+            finally:
+                while not self.data_queue.empty():
+                    try:
+                        self.data_queue.get_nowait()
+                    except queue.Empty:
+                        break
 
     def __len__(self):
         n_samples = len(self.ds)
@@ -103,7 +165,7 @@ def validate_image(image_path):
         return False
 
 def split_dataset(data_dir, output_dir, train_ratio=0.7, val_ratio=0.2, test_ratio=0.1):
-    assert abs(train_ratio + val_ratio + test_ratio - 1) < 1e-6
+    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
 
     for split in ['train', 'val', 'test']:
         split_dir = os.path.join(output_dir, split)
@@ -140,9 +202,9 @@ def split_dataset(data_dir, output_dir, train_ratio=0.7, val_ratio=0.2, test_rat
 
     print(f"Dataset split into train, val, and test sets at: {output_dir}")
 
-def create_dataloaders(output_dir, batch_size=32):
+def create_dataloaders(output_dir, batch_size=32, num_workers=4):
     train_transform = transforms.Compose([
-        transforms.Resize((128, 128)),
+        transforms.Resize((96,96)),  
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(15),
         transforms.ColorJitter(
@@ -157,7 +219,7 @@ def create_dataloaders(output_dir, batch_size=32):
     ])
 
     val_transform = transforms.Compose([
-        transforms.Resize((128, 128)),
+        transforms.Resize((96, 96)),  
         transforms.ToTensor(),
         transforms.Normalize(
             mean=[0.485, 0.456, 0.406],
@@ -190,12 +252,30 @@ def create_dataloaders(output_dir, batch_size=32):
     val_dataset = CustomDataset(val_paths, val_labels, transform=val_transform)
     test_dataset = CustomDataset(test_paths, test_labels, transform=val_transform)
 
-    train_sampler = BatchSampler(Sampler(train_dataset, shuffle=True), batch_size)
+    train_sampler = BatchSampler(Sampler(train_dataset, shuffle=True, seed=42), batch_size)
     val_sampler = BatchSampler(Sampler(val_dataset, shuffle=False), batch_size)
     test_sampler = BatchSampler(Sampler(test_dataset, shuffle=False), batch_size)
 
-    train_loader = DataLoader(train_dataset, train_sampler, collate_fn=collate)
-    val_loader = DataLoader(val_dataset, val_sampler, collate_fn=collate)
-    test_loader = DataLoader(test_dataset, test_sampler, collate_fn=collate)
+    train_loader = DataLoader(
+        train_dataset, 
+        train_sampler, 
+        collate_fn=collate,
+        num_workers=num_workers,
+        prefetch_factor=2
+    )
+    val_loader = DataLoader(
+        val_dataset, 
+        val_sampler, 
+        collate_fn=collate,
+        num_workers=num_workers,
+        prefetch_factor=2
+    )
+    test_loader = DataLoader(
+        test_dataset, 
+        test_sampler, 
+        collate_fn=collate,
+        num_workers=num_workers,
+        prefetch_factor=2
+    )
 
     return train_loader, val_loader, test_loader
