@@ -1,4 +1,4 @@
-%%writefile model_training.py
+
 import torch
 from torch.optim.lr_scheduler import ExponentialLR
 from torcheval.metrics import MulticlassAccuracy, Mean
@@ -22,16 +22,29 @@ class CancelEpochException(Exception): pass
 class LenDataLoader:
     def __init__(self, dataloader):
         self.dataloader = dataloader
-        self.dataset = getattr(dataloader, 'dataset', None)
-        self.dataset_len = len(self.dataset) if self.dataset else len(dataloader) * dataloader.batch_size
+
+        if hasattr(dataloader, 'dataset'):
+            self.dataset = dataloader.dataset
+            self.dataset_len = len(self.dataset)
+        else:
+
+            self.dataset = None
+            self.dataset_len = len(dataloader) * dataloader.batch_size
+
         self.batch_size = dataloader.batch_size
         self._length = (self.dataset_len + self.batch_size - 1) // self.batch_size
+
+
+        self.batch_sampler = getattr(dataloader, 'batch_sampler', None)
+        self.sampler = getattr(dataloader, 'sampler', None)
+        self.collate_fn = getattr(dataloader, 'collate_fn', None)
 
     def __iter__(self):
         return iter(self.dataloader)
 
     def __len__(self):
         return self._length
+
 
 class Callback:
     order = 0
@@ -71,14 +84,15 @@ class MetricsCB(Callback):
 
     def _log(self, d):
         phase = 'Training' if d['train'] == 'train' else 'Validation'
-        metrics_str = ', '.join(f"{k.title()}: {v}" for k, v in d.items() if k not in ['epoch', 'train'])
+        metrics_str = ', '.join(f"{k.title()}: {v}" for k, v in d.items()
+                              if k not in ['epoch', 'train'])
         print(f"{phase} - {metrics_str}")
 
     def before_fit(self, learn): learn.metrics = self
     def before_epoch(self, learn): [m.reset() for m in self.all_metrics.values()]
 
     def after_epoch(self, learn):
-        log = {k: f'{v.compute():.4f}' for k,v in self.all_metrics.items()}
+        log = {k: f'{v.compute():.3f}' for k,v in self.all_metrics.items()}
         log['epoch'] = learn.epoch
         log['train'] = 'train' if learn.training else 'eval'
         self._log(log)
@@ -94,7 +108,12 @@ class DeviceCB(Callback):
     order = 0
 
     def __init__(self, device=None):
-        self.device = device or default_device
+        if device is None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = device
+
+
         if self.device.type == 'cuda':
             print(f"\nUsing GPU: {torch.cuda.get_device_name(0)}")
             print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**2:.0f}MB")
@@ -102,7 +121,9 @@ class DeviceCB(Callback):
             print("\nNo GPU available, using CPU")
 
     def before_fit(self, learn):
+
         learn.model.to(self.device)
+
         if hasattr(learn, 'opt'):
             for state in learn.opt.state.values():
                 for k, v in state.items():
@@ -110,10 +131,17 @@ class DeviceCB(Callback):
                         state[k] = v.to(self.device)
 
     def before_batch(self, learn):
+
         if isinstance(learn.batch, (list, tuple)):
-            learn.batch = [b.to(self.device) if isinstance(b, torch.Tensor) else b for b in learn.batch]
+            learn.batch = [b.to(self.device) if isinstance(b, torch.Tensor) else b
+                          for b in learn.batch]
         else:
             learn.batch = learn.batch.to(self.device)
+
+    def before_epoch(self, learn):
+
+        if next(learn.model.parameters()).device != self.device:
+            learn.model.to(self.device)
 
 class with_cbs:
     def __init__(self, nm): self.nm = nm
@@ -128,9 +156,22 @@ class with_cbs:
         return _f
 
 class Learner:
-    def __init__(self, model, dls=None, loss_func=F.cross_entropy, lr=0.1, cbs=None, opt_func=optim.Adam):
+    def __init__(self, model, dls=None, loss_func=F.mse_loss, lr=0.1, cbs=None, opt_func=optim.Adam):
         self.model = model
-        self.dls = {'train': LenDataLoader(dls[0]), 'valid': LenDataLoader(dls[1])} if isinstance(dls, (list, tuple)) else dls
+
+        if dls is None:
+            self.dls = {'train': None, 'valid': None}
+        elif isinstance(dls, dict):
+            self.dls = {k: LenDataLoader(v) if isinstance(v, DataLoader) else v
+                       for k, v in dls.items()}
+        elif isinstance(dls, (list, tuple)):
+            train_dl = LenDataLoader(dls[0]) if isinstance(dls[0], DataLoader) else dls[0]
+            valid_dl = (LenDataLoader(dls[1]) if isinstance(dls[1], DataLoader) else dls[1]) if len(dls) > 1 else None
+            self.dls = {'train': train_dl, 'valid': valid_dl}
+        else:
+            self.dls = {'train': LenDataLoader(dls) if isinstance(dls, DataLoader) else dls,
+                       'valid': None}
+
         self.loss_func = loss_func
         self.lr = lr
         self.cbs = fc.L([] if cbs is None else cbs)
@@ -151,7 +192,7 @@ class Learner:
 
     @with_cbs('epoch')
     def _one_epoch(self):
-        for self.iter, self.batch in enumerate(self.dl):
+        for self.iter,self.batch in enumerate(self.dl):
             self._one_batch()
 
     def one_epoch(self, training):
@@ -218,6 +259,8 @@ class SimpleProgressCB(Callback):
         print("="*80 + "\n")
 
     def before_epoch(self, learn):
+        if not isinstance(learn.dl, LenDataLoader):
+            learn.dl = LenDataLoader(learn.dl)
         self.epoch_loss = 0
         self.epoch_correct = 0
         self.epoch_total = 0
@@ -230,6 +273,7 @@ class SimpleProgressCB(Callback):
         if hasattr(learn, 'loss'):
             self.epoch_loss += float(learn.loss)
             self.batch_count += 1
+
             if len(learn.batch) > 1:
                 preds = learn.preds.argmax(dim=1)
                 targets = learn.batch[1]
@@ -255,7 +299,10 @@ class SimpleProgressCB(Callback):
 
     def _plot_metrics(self):
         epochs = range(1, len(self.losses) + 1)
+
         plt.figure(figsize=(12, 4))
+
+
         plt.subplot(1, 2, 1)
         plt.plot(epochs, self.losses, 'b-', label='Training Loss')
         if self.val_losses:
@@ -279,11 +326,11 @@ class SimpleProgressCB(Callback):
 
 class LRFinderCB(Callback):
     def __init__(self, gamma=1.3, max_mult=3):
-        self.gamma, self.max_mult = gamma, max_mult
+        self.gamma,self.max_mult = gamma,max_mult
 
     def before_fit(self, learn):
         self.sched = ExponentialLR(learn.opt, self.gamma)
-        self.lrs, self.losses = [], []
+        self.lrs,self.losses = [],[]
         self.min = math.inf
 
     def after_batch(self, learn):
