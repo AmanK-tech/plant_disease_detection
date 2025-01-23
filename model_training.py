@@ -135,7 +135,7 @@ class DeviceCB(Callback):
     def before_batch(self, learn):
         
         if isinstance(learn.batch, (list, tuple)):
-            learn.batch = [b.to(self.device) if isinstance(b, torch.Tensor) else b] 
+            learn.batch = [b.to(self.device) if isinstance(b, torch.Tensor) else b 
             learn.batch = [b.to(self.device) if isinstance(b, torch.Tensor) else b
                           for b in learn.batch]
         else:
