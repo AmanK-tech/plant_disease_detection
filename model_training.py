@@ -229,6 +229,34 @@ class TrainCB(Callback):
     def step(self, learn): learn.opt.step()
     def zero_grad(self, learn): learn.opt.zero_grad()
 
+class MetricsCB(Callback):
+    def __init__(self, *ms, **metrics):
+        for m in ms: metrics[m.__class__.__name__] = m
+        self.metrics = metrics
+        self.all_metrics = copy(metrics)
+        self.all_metrics['loss'] = self.loss = Mean()
+
+    def _log(self, d):
+        phase = 'Training' if d['train'] == 'train' else 'Validation'
+        metrics_str = ', '.join(f"{k.title()}: {v}" for k, v in d.items()
+                              if k not in ['epoch', 'train'])
+        print(f"{phase} - {metrics_str}")
+
+    def before_fit(self, learn): learn.metrics = self
+    def before_epoch(self, learn): [m.reset() for m in self.all_metrics.values()]
+
+    def after_batch(self, learn):
+        if learn.training:
+            self.loss.update(learn.loss.item())
+            for metric in self.metrics.values():
+                metric.update(learn.preds.argmax(dim=1), learn.batch[1])
+
+    def after_epoch(self, learn):
+        log = {k: f'{v.compute():.3f}' for k,v in self.all_metrics.items()}
+        log['epoch'] = learn.epoch
+        log['train'] = 'train' if learn.training else 'eval'
+        self._log(log)
+
 class SimpleProgressCB(Callback):
     order = MetricsCB.order + 1
     
@@ -296,7 +324,7 @@ class SimpleProgressCB(Callback):
 
         plt.subplot(1, 2, 1)
         plt.plot(epochs, self.losses, 'b-', label='Training Loss')
-        if self.val_losses and len(self.val_losses) == len(self.losses):  # Ensure lengths match
+        if self.val_losses and len(self.val_losses) == len(self.losses):  
             plt.plot(epochs, self.val_losses, 'r-', label='Validation Loss')
         plt.title('Training and Validation Loss')
         plt.xlabel('Epoch')
@@ -305,7 +333,7 @@ class SimpleProgressCB(Callback):
 
         plt.subplot(1, 2, 2)
         plt.plot(epochs, self.accuracies, 'b-', label='Training Accuracy')
-        if self.val_accuracies and len(self.val_accuracies) == len(self.accuracies):  # Ensure lengths match
+        if self.val_accuracies and len(self.val_accuracies) == len(self.accuracies):  
             plt.plot(epochs, self.val_accuracies, 'r-', label='Validation Accuracy')
         plt.title('Training and Validation Accuracy')
         plt.xlabel('Epoch')
@@ -314,34 +342,3 @@ class SimpleProgressCB(Callback):
 
         plt.tight_layout()
         plt.show()
-
-class LRFinderCB(Callback):
-    def __init__(self, gamma=1.3, max_mult=3):
-        self.gamma,self.max_mult = gamma,max_mult
-
-    def before_fit(self, learn):
-        self.sched = ExponentialLR(learn.opt, self.gamma)
-        self.lrs,self.losses = [],[]
-        self.min = math.inf
-
-    def after_batch(self, learn):
-        if not learn.training: raise CancelEpochException()
-        self.lrs.append(learn.opt.param_groups[0]['lr'])
-        loss = to_cpu(learn.loss).item()
-        self.losses.append(loss)
-        if loss < self.min: self.min = loss
-        if math.isnan(loss) or loss > self.min * self.max_mult:
-            raise CancelFitException()
-        self.sched.step()
-
-    def cleanup_fit(self, learn):
-        plt.plot(self.lrs, self.losses)
-        plt.xscale('log')
-        plt.xlabel('Learning Rate')
-        plt.ylabel('Loss')
-        plt.show()
-
-class CompletionCB(Callback):
-    def before_fit(self, learn): self.count = 0
-    def after_batch(self, learn): self.count += 1
-    def after_fit(self, learn): print(f'Completed {self.count} batches')
