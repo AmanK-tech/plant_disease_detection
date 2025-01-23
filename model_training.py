@@ -231,9 +231,19 @@ class TrainCB(Callback):
 
 class MetricsCB(Callback):
     def __init__(self, *ms, **metrics):
-        for m in ms: metrics[m.__class__.__name__] = m
-        self.metrics = metrics
-        self.all_metrics = copy(metrics)
+        self.metrics = {}
+        self.all_metrics = {}
+        
+        for m in ms:
+            if hasattr(m, 'update') and hasattr(m, 'compute'):
+                self.metrics[m.__class__.__name__] = m
+                self.all_metrics[m.__class__.__name__] = m
+        
+        for name, m in metrics.items():
+            if hasattr(m, 'update') and hasattr(m, 'compute'):
+                self.metrics[name] = m
+                self.all_metrics[name] = m
+        
         self.all_metrics['loss'] = self.loss = Mean()
 
     def _log(self, d):
@@ -242,17 +252,41 @@ class MetricsCB(Callback):
                               if k not in ['epoch', 'train'])
         print(f"{phase} - {metrics_str}")
 
-    def before_fit(self, learn): learn.metrics = self
-    def before_epoch(self, learn): [m.reset() for m in self.all_metrics.values()]
+    def before_fit(self, learn): 
+        learn.metrics = self
+
+    def before_epoch(self, learn): 
+        for m in self.all_metrics.values():
+            if hasattr(m, 'reset'):
+                m.reset()
 
     def after_batch(self, learn):
         if learn.training:
-            self.loss.update(learn.loss.item())
-            for metric in self.metrics.values():
-                metric.update(learn.preds.argmax(dim=1), learn.batch[1])
+            
+            if hasattr(learn, 'loss'):
+                try:
+                    loss_value = learn.loss.item() if torch.is_tensor(learn.loss) else learn.loss
+                    self.loss.update(loss_value)
+                except Exception as e:
+                    print(f"Loss update error: {e}")
+
+            
+            for metric_name, metric in self.metrics.items():
+                try:
+                    metric.update(learn.preds.argmax(dim=1), learn.batch[1])
+                except Exception as e:
+                    print(f"Metric {metric_name} update error: {e}")
 
     def after_epoch(self, learn):
-        log = {k: f'{v.compute():.3f}' for k,v in self.all_metrics.items()}
+        log = {}
+        for name, metric in self.all_metrics.items():
+            try:
+                if hasattr(metric, 'compute'):
+                    log[name] = f'{metric.compute():.3f}'
+            except Exception as e:
+                print(f"Metric {name} compute error: {e}")
+                log[name] = 'N/A'
+        
         log['epoch'] = learn.epoch
         log['train'] = 'train' if learn.training else 'eval'
         self._log(log)
