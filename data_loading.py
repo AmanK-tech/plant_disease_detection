@@ -28,7 +28,7 @@ class CustomDataset:
         self.transform = transform
         self.label_to_idx = {label: idx for idx, label in enumerate(set(y))}
         self.y = [self.label_to_idx[label] for label in y]
-        self.cache = {}
+        self.cache = {}  
 
     def __len__(self):
         return len(self.x)
@@ -41,7 +41,7 @@ class CustomDataset:
             else:
                 image = Image.open(image_path).convert('RGB')
 
-                if len(self.cache) < 1000:
+                if len(self.cache) < 1000:  
                     self.cache[image_path] = image
 
             if self.transform:
@@ -204,7 +204,8 @@ def split_dataset(data_dir, output_dir, train_ratio=0.7, val_ratio=0.2, test_rat
 
 def create_dataloaders(output_dir, batch_size=32, num_workers=4):
     train_transform = transforms.Compose([
-        transforms.Resize((128,128)),
+        transforms.Resize((96,96)),  
+        transforms.Resize((128,128)),  
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(15),
         transforms.ColorJitter(
@@ -219,7 +220,8 @@ def create_dataloaders(output_dir, batch_size=32, num_workers=4):
     ])
 
     val_transform = transforms.Compose([
-        transforms.Resize((128,128)),
+        transforms.Resize((96, 96)),  
+        transforms.Resize((128,128)),  
         transforms.ToTensor(),
         transforms.Normalize(
             mean=[0.485, 0.456, 0.406],
@@ -257,22 +259,22 @@ def create_dataloaders(output_dir, batch_size=32, num_workers=4):
     test_sampler = BatchSampler(Sampler(test_dataset, shuffle=False), batch_size)
 
     train_loader = DataLoader(
-        train_dataset,
-        train_sampler,
+        train_dataset, 
+        train_sampler, 
         collate_fn=collate,
         num_workers=num_workers,
         prefetch_factor=2
     )
     val_loader = DataLoader(
-        val_dataset,
-        val_sampler,
+        val_dataset, 
+        val_sampler, 
         collate_fn=collate,
         num_workers=num_workers,
         prefetch_factor=2
     )
     test_loader = DataLoader(
-        test_dataset,
-        test_sampler,
+        test_dataset, 
+        test_sampler, 
         collate_fn=collate,
         num_workers=num_workers,
         prefetch_factor=2
