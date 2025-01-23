@@ -296,22 +296,22 @@ class SimpleProgressCB(Callback):
 
         plt.subplot(1, 2, 1)
         plt.plot(epochs, self.losses, 'b-', label='Training Loss')
-        if self.val_losses:  
+        if self.val_losses and len(self.val_losses) == len(self.losses):  # Ensure lengths match
             plt.plot(epochs, self.val_losses, 'r-', label='Validation Loss')
         plt.title('Training and Validation Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
         plt.legend()
-        
+
         plt.subplot(1, 2, 2)
         plt.plot(epochs, self.accuracies, 'b-', label='Training Accuracy')
-        if self.val_accuracies:  
+        if self.val_accuracies and len(self.val_accuracies) == len(self.accuracies):  # Ensure lengths match
             plt.plot(epochs, self.val_accuracies, 'r-', label='Validation Accuracy')
         plt.title('Training and Validation Accuracy')
         plt.xlabel('Epoch')
         plt.ylabel('Accuracy (%)')
         plt.legend()
-        
+
         plt.tight_layout()
         plt.show()
 
