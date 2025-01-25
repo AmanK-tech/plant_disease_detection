@@ -228,6 +228,7 @@ class TrainCB(Callback):
       print(f"Predictions shape: {learn.preds.shape}")
       print(f"Targets shape: {learn.batch[1].shape}")
       learn.loss = learn.loss_func(learn.preds, learn.batch[1])
+      print(f"Computed Loss: {learn.loss.item()}")
     def backward(self, learn): learn.loss.backward()
     def step(self, learn): learn.opt.step()
     def zero_grad(self, learn): learn.opt.zero_grad()
@@ -264,23 +265,22 @@ class MetricsCB(Callback):
                 m.reset()
 
     def after_batch(self, learn):
-        if learn.training:
-          print(f"Batch predictions shape: {learn.preds.shape}")
-          print(f"Batch predictions: {learn.preds.argmax(dim=1)}")
-          print(f"Batch targets: {learn.batch[1]}")
-          if hasattr(learn, 'loss'):
-              try:
-                  loss_value = learn.loss.item() if torch.is_tensor(learn.loss) else learn.loss
-                  self.loss.update(loss_value)
-              except Exception as e:
-                  print(f"Loss update error: {e}")
-
-
+      if learn.training:
+          try:
+              loss_value = learn.loss.item()
+              self.loss.update(loss_value)
+              
+              preds = learn.preds.argmax(dim=1)
+              targets = learn.batch[1]
+              
+              print(f"Predictions: {preds}")
+              print(f"Targets: {targets}")
+              print(f"Loss: {loss_value}")
+              
               for metric_name, metric in self.metrics.items():
-                  try:
-                      metric.update(learn.preds.argmax(dim=1), learn.batch[1])
-                  except Exception as e:
-                      print(f"Metric {metric_name} update error: {e}")
+                  metric.update(preds, targets)
+          except Exception as e:
+              print(f"Metric update error: {e}")
 
     def after_epoch(self, learn):
         log = {}
