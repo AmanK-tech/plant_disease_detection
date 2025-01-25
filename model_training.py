@@ -268,12 +268,12 @@ class MetricsCB(Callback):
           print(f"Batch predictions shape: {learn.preds.shape}")
           print(f"Batch predictions: {learn.preds.argmax(dim=1)}")
           print(f"Batch targets: {learn.batch[1]}")
-            if hasattr(learn, 'loss'):
-                try:
-                    loss_value = learn.loss.item() if torch.is_tensor(learn.loss) else learn.loss
-                    self.loss.update(loss_value)
-                except Exception as e:
-                    print(f"Loss update error: {e}")
+          if hasattr(learn, 'loss'):
+              try:
+                  loss_value = learn.loss.item() if torch.is_tensor(learn.loss) else learn.loss
+                  self.loss.update(loss_value)
+              except Exception as e:
+                  print(f"Loss update error: {e}")
 
 
             for metric_name, metric in self.metrics.items():
