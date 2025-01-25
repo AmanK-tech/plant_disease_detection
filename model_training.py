@@ -282,8 +282,6 @@ class SimpleProgressCB(Callback):
         if hasattr(learn, 'loss'):
             self.epoch_loss += float(learn.loss)
             self.batch_count += 1
-
-            
             preds = learn.preds.argmax(dim=1)
             targets = learn.batch[1]  
             self.epoch_correct += (preds == targets).sum().item()
