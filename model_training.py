@@ -83,6 +83,11 @@ class MetricsCB(Callback):
         self.all_metrics['loss'] = self.loss = Mean()
 
     def _log(self, d): print(d)
+    def _log(self, d):
+        phase = 'Training' if d['train'] == 'train' else 'Validation'
+        metrics_str = ', '.join(f"{k.title()}: {v}" for k, v in d.items() 
+                              if k not in ['epoch', 'train'])
+        print(f"{phase} - {metrics_str}")
     def before_fit(self, learn): learn.metrics = self
     def before_epoch(self, learn): [m.reset() for m in self.all_metrics.values()]
 
@@ -97,7 +102,6 @@ class MetricsCB(Callback):
         for m in self.metrics.values():
             m.update(to_cpu(learn.preds), y)
         self.loss.update(to_cpu(learn.loss), weight=len(x))
-
 default_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def to_device(obj, device):
@@ -109,6 +113,43 @@ class DeviceCB(Callback):
     def __init__(self, device=default_device): self.device = device
     def before_fit(self, learn): learn.model.to(self.device)
     def before_batch(self, learn): learn.batch = to_device(learn.batch, device=self.device)
+    order = 0  
+    
+    def __init__(self, device=None):
+        if device is None:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            self.device = device
+        
+        
+        if self.device.type == 'cuda':
+            print(f"\nUsing GPU: {torch.cuda.get_device_name(0)}")
+            print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**2:.0f}MB")
+        else:
+            print("\nNo GPU available, using CPU")
+    
+    def before_fit(self, learn):
+        
+        learn.model.to(self.device)
+        
+        if hasattr(learn, 'opt'):
+            for state in learn.opt.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.to(self.device)
+    
+    def before_batch(self, learn):
+        
+        if isinstance(learn.batch, (list, tuple)):
+            learn.batch = [b.to(self.device) if isinstance(b, torch.Tensor) else b 
+                          for b in learn.batch]
+        else:
+            learn.batch = learn.batch.to(self.device)
+    
+    def before_epoch(self, learn):
+        
+        if next(learn.model.parameters()).device != self.device:
+            learn.model.to(self.device)
 
 class with_cbs:
     def __init__(self, nm): self.nm = nm
@@ -129,14 +170,14 @@ class Learner:
         if dls is None:
             self.dls = {'train': None, 'valid': None}
         elif isinstance(dls, dict):
-            self.dls = {k: LenDataLoader(v) if isinstance(v, DataLoader) else v 
+            self.dls = {k: LenDataLoader(v) if isinstance(v, DataLoader) else v
                        for k, v in dls.items()}
         elif isinstance(dls, (list, tuple)):
             train_dl = LenDataLoader(dls[0]) if isinstance(dls[0], DataLoader) else dls[0]
             valid_dl = (LenDataLoader(dls[1]) if isinstance(dls[1], DataLoader) else dls[1]) if len(dls) > 1 else None
             self.dls = {'train': train_dl, 'valid': valid_dl}
         else:
-            self.dls = {'train': LenDataLoader(dls) if isinstance(dls, DataLoader) else dls, 
+            self.dls = {'train': LenDataLoader(dls) if isinstance(dls, DataLoader) else dls,
                        'valid': None}
 
         self.loss_func = loss_func
@@ -205,55 +246,101 @@ class TrainCB(Callback):
     def step(self, learn): learn.opt.step()
     def zero_grad(self, learn): learn.opt.zero_grad()
 
-class ProgressCB(Callback):
+class SimpleProgressCB(Callback):
     order = MetricsCB.order + 1
 
-    def __init__(self, plot=False): 
+    def __init__(self, plot=False):
         self.plot = plot
+        self.losses = []
+        self.val_losses = []
+        self.accuracies = []
+        self.val_accuracies = []
+        self.epoch_loss = 0
+        self.epoch_correct = 0
+        self.epoch_total = 0
+        self.batch_count = 0
 
     def before_fit(self, learn):
-        
-        learn.epochs = list(range(learn.n_epochs))
-        self.mbar = master_bar(learn.epochs)
-        self.first = True
-        if hasattr(learn, 'metrics'): 
-            learn.metrics._log = self._log
-        self.losses, self.val_losses = [], []
-
-    def _log(self, d):
-        if self.first:
-            self.mbar.write(list(d), table=True)
-            self.first = False
-        self.mbar.write(list(d.values()), table=True)
+        self.n_epochs = learn.n_epochs
+        print(f'Starting training for {self.n_epochs} epochs')
+        print("\n" + "="*80)
+        print(f"Starting training for {self.n_epochs} epochs")
+        print("="*80 + "\n")
 
     def before_epoch(self, learn):
         if not isinstance(learn.dl, LenDataLoader):
             learn.dl = LenDataLoader(learn.dl)
-        batches = list(range(len(learn.dl)))
-        learn.dl = progress_bar(batches, leave=False, parent=self.mbar)
-        self.iter = iter(learn.dl.iterable)
-        
-        self.orig_dl = learn.dl
-        learn.dl = progress_bar(learn.dl, leave=False, parent=self.mbar)
+        self.epoch_loss = 0
+        self.epoch_correct = 0
+        self.epoch_total = 0
+        self.batch_count = 0
+        if learn.training:
+            print(f"\nEpoch {learn.epoch+1}/{self.n_epochs}")
+            print("-"*40)
 
     def after_batch(self, learn):
         if hasattr(learn, 'loss'):
+            self.epoch_loss += float(learn.loss)
+            self.batch_count += 1
+
             
-            learn.dl.comment = f'{float(learn.loss):.3f}'
-            if self.plot and learn.training:
-                self.losses.append(float(learn.loss))
+            preds = learn.preds.argmax(dim=1)
+            targets = learn.batch[1]  
+            self.epoch_correct += (preds == targets).sum().item()
+            self.epoch_total += targets.size(0)
 
     def after_epoch(self, learn):
-        learn.dl = self.orig_dl
-        if not learn.training and self.plot and hasattr(learn, 'metrics'):
+        avg_loss = self.epoch_loss / self.batch_count
+        accuracy = (self.epoch_correct / self.epoch_total) * 100
+
+        if learn.training:
+            print(f'Epoch {learn.epoch+1}/{self.n_epochs}:')
+            print(f'Training Loss: {avg_loss:.4f}, Training Accuracy: {accuracy:.2f}%')
+            self.losses.append(avg_loss)
+            self.accuracies.append(accuracy)
+            print(f"Training   - Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%")
+
+        if not learn.training and hasattr(learn, 'metrics'):
             val_loss = learn.metrics.all_metrics['loss'].compute()
+            val_acc = self.epoch_correct / self.epoch_total * 100
+            print(f'Validation Loss: {float(val_loss):.4f}, Validation Accuracy: {val_acc:.2f}%\n')
             self.val_losses.append(float(val_loss))
-            if hasattr(self.mbar, 'update_graph'):
-                self.mbar.update_graph([[i, l] for i, l in enumerate(self.losses)],
-                                     [[i, l] for i, l in enumerate(self.val_losses)])
+            self.val_accuracies.append(val_acc)
+            print(f"Validation - Loss: {float(val_loss):.4f}, Accuracy: {val_acc:.2f}%")
+            print("-"*40)
+        
+        if self.plot and learn.epoch == self.n_epochs-1:
+            self._plot_metrics()
+    
+    def _plot_metrics(self):
+        epochs = range(1, len(self.losses) + 1)
+        
+        plt.figure(figsize=(12, 4))
+        
+        
+        plt.subplot(1, 2, 1)
+        plt.plot(epochs, self.losses, 'b-', label='Training Loss')
+        plt.plot(epochs, self.val_losses, 'r-', label='Validation Loss')
+        plt.title('Training and Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+        
+        
+        plt.subplot(1, 2, 2)
+        plt.plot(epochs, self.accuracies, 'b-', label='Training Accuracy')
+        plt.plot(epochs, self.val_accuracies, 'r-', label='Validation Accuracy')
+        plt.title('Training and Validation Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy (%)')
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.show()
+
 
 class LRFinderCB(Callback):
-    def __init__(self, gamma=1.3, max_mult=3): 
+    def __init__(self, gamma=1.3, max_mult=3):
         self.gamma,self.max_mult = gamma,max_mult
 
     def before_fit(self, learn):
