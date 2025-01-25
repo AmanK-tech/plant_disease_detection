@@ -22,15 +22,31 @@ def lin(inp, op, dl=True, act=True):
         layers.append(nn.ReLU())
     return nn.Sequential(*layers)
 
-cnn_arch = nn.Sequential(
-    conv(3, 32, 3),
-    conv(32, 64, 3),
-    conv(64, 128, 3),
-    nn.Flatten(),  
-    lin(128 * 16 * 16, 256),
-    lin(256, 128),
-    lin(128, 15, act=False)
-)
+class CNNArchitecture(nn.Module):
+    def __init__(self, num_classes=15):
+        super().__init__()
+        self.features = nn.Sequential(
+            conv(3, 32, 3),
+            conv(32, 64, 3),
+            conv(64, 128, 3)
+        )
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            lin(128 * 16 * 16, 256),
+            lin(256, 128),
+            lin(128, num_classes, act=False)
+        )
+
+    def forward(self, x):
+        print(f"Input shape: {x.shape}")
+        x = self.features(x)
+        print(f"Features shape: {x.shape}")
+        x = self.classifier(x)
+        print(f"Output shape: {x.shape}")
+        return x
+
+cnn_arch = CNNArchitecture()
+
 
 
 
