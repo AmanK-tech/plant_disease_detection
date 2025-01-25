@@ -276,11 +276,11 @@ class MetricsCB(Callback):
                   print(f"Loss update error: {e}")
 
 
-            for metric_name, metric in self.metrics.items():
-                try:
-                    metric.update(learn.preds.argmax(dim=1), learn.batch[1])
-                except Exception as e:
-                    print(f"Metric {metric_name} update error: {e}")
+              for metric_name, metric in self.metrics.items():
+                  try:
+                      metric.update(learn.preds.argmax(dim=1), learn.batch[1])
+                  except Exception as e:
+                      print(f"Metric {metric_name} update error: {e}")
 
     def after_epoch(self, learn):
         log = {}
