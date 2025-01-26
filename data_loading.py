@@ -13,22 +13,39 @@ from typing import Optional, List, Tuple
 import numpy as np
 
 def collate(batch):
+    # Filter out None values
     batch = [b for b in batch if b is not None]
     if not batch:
+        print("Collate: No valid batches")
         return None, None
-    inputs, labels = zip(*batch)
-    inputs = torch.stack(inputs)
-    labels = torch.tensor(labels, dtype=torch.long)
-    return inputs, labels
+    
+    try:
+        inputs, labels = zip(*batch)
+        inputs = torch.stack(inputs)
+        labels = torch.tensor(labels, dtype=torch.long)
+        return inputs, labels
+    except Exception as e:
+        print(f"Collate error: {e}")
+        return None, None
 
 class CustomDataset:
     def __init__(self, x, y, transform=None):
+        print(f"Creating dataset with {len(x)} samples")
         self.x = x
         self.y = y
         self.transform = transform
-        self.label_to_idx = {label: idx for idx, label in enumerate(set(y))}
+        
+        # Create label to index mapping
+        self.label_to_idx = {label: idx for idx, label in enumerate(sorted(set(y)))}
         self.y = [self.label_to_idx[label] for label in y]
-        self.cache = {}  
+        
+        self.cache = {}
+        
+        # Detailed logging
+        print(f"Unique labels: {list(self.label_to_idx.keys())}")
+        print(f"Label mapping: {self.label_to_idx}")
+        print(f"First 5 image paths: {self.x[:5]}")
+        print(f"First 5 labels: {self.y[:5]}")
 
     def __len__(self):
         return len(self.x)
@@ -36,16 +53,25 @@ class CustomDataset:
     def __getitem__(self, i):
         image_path, label = self.x[i], self.y[i]
         try:
+            # Check if image exists
+            if not os.path.exists(image_path):
+                print(f"Image does not exist: {image_path}")
+                return None
+
             if image_path in self.cache:
                 image = self.cache[image_path]
             else:
+                # Open and convert image
                 image = Image.open(image_path).convert('RGB')
 
-                if len(self.cache) < 1000:  
+                # Cache management
+                if len(self.cache) < 1000:
                     self.cache[image_path] = image
 
+            # Apply transformations
             if self.transform:
                 image = self.transform(image)
+            
             return image, label
         except (UnidentifiedImageError, OSError, Exception) as e:
             print(f"Error loading image {image_path}: {str(e)}")
@@ -58,6 +84,9 @@ class Sampler:
         self.seed = seed
         self._rng = np.random.RandomState(seed) if seed is not None else np.random
 
+        print(f"Sampler created with {self.n} samples")
+        print(f"Shuffle: {shuffle}, Seed: {seed}")
+
     def __iter__(self):
         indices = np.arange(self.n)
         if self.shuffle:
@@ -69,6 +98,10 @@ class BatchSampler:
         self.sampler = sampler
         self.batch_size = batch_size
         self.drop_last = drop_last
+        
+        print(f"BatchSampler created:")
+        print(f"  Batch size: {batch_size}")
+        print(f"  Drop last: {drop_last}")
 
     def __iter__(self):
         batch = []
@@ -90,6 +123,12 @@ class DataLoader:
         self.prefetch_factor = prefetch_factor
         self.queue_size = max(1, num_workers * prefetch_factor)
 
+        print(f"DataLoader Configuration:")
+        print(f"  Total samples: {len(ds)}")
+        print(f"  Batch size: {self.batch_size}")
+        print(f"  Number of workers: {num_workers}")
+        print(f"  Prefetch factor: {prefetch_factor}")
+
         if num_workers > 0:
             self.thread_pool = ThreadPoolExecutor(max_workers=num_workers)
             self.data_queue = queue.Queue(maxsize=self.queue_size)
@@ -103,9 +142,12 @@ class DataLoader:
             item = self.ds[i]
             if item is not None:
                 batch.append(item)
-        if batch:
-            return self.collate_fn(batch)
-        return None, None
+        
+        if not batch:
+            print(f"No valid items in batch with indices: {batch_indices}")
+            return None, None
+        
+        return self.collate_fn(batch)
 
     def _prefetch_worker(self, batch_indices):
         try:
@@ -161,7 +203,8 @@ def validate_image(image_path):
         with Image.open(image_path) as img:
             img.verify()
         return True
-    except:
+    except Exception as e:
+        print(f"Image validation failed for {image_path}: {e}")
         return False
 
 def split_dataset(data_dir, output_dir, train_ratio=0.7, val_ratio=0.2, test_ratio=0.1):
@@ -202,10 +245,9 @@ def split_dataset(data_dir, output_dir, train_ratio=0.7, val_ratio=0.2, test_rat
 
     print(f"Dataset split into train, val, and test sets at: {output_dir}")
 
-def create_dataloaders(output_dir, batch_size=32, num_workers=4):
+def create_dataloaders(output_dir, batch_size=64, num_workers=4):
     train_transform = transforms.Compose([
-        transforms.Resize((96,96)),  
-        transforms.Resize((128,128)),  
+        transforms.Resize((128,128)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomRotation(15),
         transforms.ColorJitter(
@@ -220,8 +262,7 @@ def create_dataloaders(output_dir, batch_size=32, num_workers=4):
     ])
 
     val_transform = transforms.Compose([
-        transforms.Resize((96, 96)),  
-        transforms.Resize((128,128)),  
+        transforms.Resize((128,128)),
         transforms.ToTensor(),
         transforms.Normalize(
             mean=[0.485, 0.456, 0.406],
@@ -231,24 +272,36 @@ def create_dataloaders(output_dir, batch_size=32, num_workers=4):
 
     def load_split(split):
         split_dir = os.path.join(output_dir, split)
+        print(f"Loading {split} split from {split_dir}")
+        
         image_paths = []
         labels = []
-        for class_name in os.listdir(split_dir):
+        
+        for class_name in sorted(os.listdir(split_dir)):
             class_dir = os.path.join(split_dir, class_name)
             if not os.path.isdir(class_dir):
                 continue
+            
+            print(f"  Processing class: {class_name}")
             for img_file in os.listdir(class_dir):
                 img_path = os.path.join(class_dir, img_file)
                 if validate_image(img_path):
                     image_paths.append(img_path)
                     labels.append(class_name)
                 else:
-                    print(f"Skipping invalid image during dataloader creation: {img_path}")
+                    print(f"Skipping invalid image: {img_path}")
+        
+        print(f"{split} split - Total images: {len(image_paths)}")
         return image_paths, labels
 
     train_paths, train_labels = load_split('train')
     val_paths, val_labels = load_split('val')
     test_paths, test_labels = load_split('test')
+
+    print(f"Dataset summary:")
+    print(f"  Train samples: {len(train_paths)}")
+    print(f"  Val samples: {len(val_paths)}")
+    print(f"  Test samples: {len(test_paths)}")
 
     train_dataset = CustomDataset(train_paths, train_labels, transform=train_transform)
     val_dataset = CustomDataset(val_paths, val_labels, transform=val_transform)
@@ -259,22 +312,22 @@ def create_dataloaders(output_dir, batch_size=32, num_workers=4):
     test_sampler = BatchSampler(Sampler(test_dataset, shuffle=False), batch_size)
 
     train_loader = DataLoader(
-        train_dataset, 
-        train_sampler, 
+        train_dataset,
+        train_sampler,
         collate_fn=collate,
         num_workers=num_workers,
         prefetch_factor=2
     )
     val_loader = DataLoader(
-        val_dataset, 
-        val_sampler, 
+        val_dataset,
+        val_sampler,
         collate_fn=collate,
         num_workers=num_workers,
         prefetch_factor=2
     )
     test_loader = DataLoader(
-        test_dataset, 
-        test_sampler, 
+        test_dataset,
+        test_sampler,
         collate_fn=collate,
         num_workers=num_workers,
         prefetch_factor=2
