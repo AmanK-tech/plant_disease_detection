@@ -71,6 +71,8 @@ class Learner:
         self._run_callbacks('on_epoch_begin', self.current_epoch)
 
         for batch_idx, (inputs, targets) in enumerate(self.train_loader):
+            if inputs is None or targets is None:
+              continue
             inputs, targets = inputs.to(self.device), targets.to(self.device)
             
             self._run_callbacks('on_train_batch_begin', batch_idx)
