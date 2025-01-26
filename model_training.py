@@ -63,17 +63,35 @@ class Learner:
                 method(*args, **kwargs)
 
     def train_epoch(self):
+        # self.model.train()
+        # total_loss = 0
+        # total_correct = 0
+        # total_samples = 0
+
+        # self._run_callbacks('on_epoch_begin', self.current_epoch)
+
+        # for batch_idx, (inputs, targets) in enumerate(self.train_loader):
+        #     if inputs is None or targets is None:
+        #       continue
+        #     inputs, targets = inputs.to(self.device), targets.to(self.device)
         self.model.train()
         total_loss = 0
         total_correct = 0
         total_samples = 0
 
-        self._run_callbacks('on_epoch_begin', self.current_epoch)
+        print(f"Total batches in train_loader: {len(self.train_loader)}")
 
         for batch_idx, (inputs, targets) in enumerate(self.train_loader):
+            print(f"Batch {batch_idx}:")
             if inputs is None or targets is None:
-              continue
+                print(f"  Skipping batch {batch_idx} - inputs or targets are None")
+                continue
+            
+            print(f"  Inputs shape: {inputs.shape}")
+            print(f"  Targets shape: {targets.shape}")
+            
             inputs, targets = inputs.to(self.device), targets.to(self.device)
+        
             
             self._run_callbacks('on_train_batch_begin', batch_idx)
             
