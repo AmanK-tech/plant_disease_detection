@@ -37,7 +37,10 @@ class CNNArchitecture(nn.Module):
             lin(128, num_classes, act=False)
         )
 
-    
+    def forward(self, x):
+        x = self.features(x)
+        x = self.classifier(x)
+        return x
 
 cnn_arch = CNNArchitecture()
 
