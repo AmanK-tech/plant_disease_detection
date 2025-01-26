@@ -37,13 +37,7 @@ class CNNArchitecture(nn.Module):
             lin(128, num_classes, act=False)
         )
 
-    def forward(self, x):
-        print(f"Input shape: {x.shape}")
-        x = self.features(x)
-        print(f"Features shape: {x.shape}")
-        x = self.classifier(x)
-        print(f"Output shape: {x.shape}")
-        return x
+    
 
 cnn_arch = CNNArchitecture()
 
