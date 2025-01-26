@@ -37,23 +37,23 @@ class MetricCallback(Callback):
 class Learner:
     def __init__(self, model, train_loader, val_loader=None, test_loader=None, optimizer=None, loss_fn=None, device=None,callbacks=None):
         self.device = device or (torch.cuda.is_available() and torch.device('cuda')) or torch.device('cpu')
-        
+
         self.model = model.to(self.device)
-        
+
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.test_loader = test_loader
-        
+
         self.optimizer = optimizer or optim.Adam(self.model.parameters())
         self.loss_fn = loss_fn or nn.CrossEntropyLoss()
-        
+
         self.callbacks = callbacks or []
         self.metrics_callback = MetricCallback()
         self.callbacks.append(self.metrics_callback)
-        
+
         self.current_epoch = 0
         self.history = {}
-        
+
         self.scaler = GradScaler()
 
     def _run_callbacks(self, event, *args, **kwargs):
@@ -87,19 +87,19 @@ class Learner:
             if inputs is None or targets is None:
                 print(f"  Skipping batch {batch_idx} - inputs or targets are None")
                 continue
-            
+
             print(f"  Inputs shape: {inputs.shape}")
             print(f"  Targets shape: {targets.shape}")
-            
+
             inputs, targets = inputs.to(self.device), targets.to(self.device)
-        
-            
+
+
             self._run_callbacks('on_train_batch_begin', batch_idx)
-            
+
             with autocast():
                 outputs = self.model(inputs)
                 loss = self.loss_fn(outputs, targets)
-            
+
             self.optimizer.zero_grad()
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
@@ -141,9 +141,9 @@ class Learner:
         with torch.no_grad():
             for batch_idx, (inputs, targets) in enumerate(self.val_loader):
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
-                
+
                 self._run_callbacks('on_val_batch_begin', batch_idx)
-                
+
                 outputs = self.model(inputs)
                 loss = self.loss_fn(outputs, targets)
 
@@ -169,15 +169,15 @@ class Learner:
 
     def fit(self, epochs):
         self._run_callbacks('on_train_begin')
-        
+
         for epoch in range(epochs):
             self.current_epoch = epoch
             train_metrics = self.train_epoch()
-            
+
             val_metrics = self.validate() if self.val_loader else {}
-            
+
             epoch_metrics = {**train_metrics, **val_metrics}
-            
+
             for key, value in epoch_metrics.items():
                 if key not in self.history:
                     self.history[key] = []
@@ -192,4 +192,3 @@ class PrintCallback(Callback):
 
 
 
-    
