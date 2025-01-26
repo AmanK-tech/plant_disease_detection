@@ -78,6 +78,7 @@ class Learner:
         total_loss = 0
         total_correct = 0
         total_samples = 0
+        self._run_callbacks('on_epoch_begin', self.current_epoch)
 
         print(f"Total batches in train_loader: {len(self.train_loader)}")
 
