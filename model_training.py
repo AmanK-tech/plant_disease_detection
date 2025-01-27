@@ -108,6 +108,7 @@ class Learner:
         }
 
     def validate(self):
+        loader = loader or self.val_loader
         if not self.val_loader:
             return {}
 
