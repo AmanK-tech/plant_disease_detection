@@ -178,8 +178,6 @@ class PrintCallback(Callback):
         print(f"  Validation Accuracy: {logs.get('val_accuracy', 'NA')}")
 
 class TestCallback(Callback):
-    def __init__(self, learner):
-        self.learner = learner
     def on_train_end(self, logs=None):
         if self.learner.test_loader:
             test_metrics = self.learner.validate(loader=self.learner.test_loader)
