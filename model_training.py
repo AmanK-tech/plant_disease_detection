@@ -97,7 +97,7 @@ class Learner:
             self._run_callbacks('on_train_batch_end', batch_idx, logs=batch_logs)
 
         epoch_loss = total_loss / len(self.train_loader)
-        epoch_accuracy = total_correct / total_samples
+        epoch_accuracy = (total_correct / total_samples) *100
 
         return {
             'loss': epoch_loss,
@@ -135,7 +135,7 @@ class Learner:
                 self._run_callbacks('on_val_batch_end', batch_idx, logs=batch_logs)
 
         val_loss = total_loss / len(self.val_loader)
-        val_accuracy = total_correct / total_samples
+        val_accuracy = (total_correct / total_samples)*100
 
         return {
             'val_loss': val_loss,
@@ -176,3 +176,12 @@ class PrintCallback(Callback):
         print(f"  Training Accuracy: {logs.get('accuracy', 'NA')}")
         print(f"  Validation Loss: {logs.get('val_loss', 'NA')}")
         print(f"  Validation Accuracy: {logs.get('val_accuracy', 'NA')}")
+
+class TestCallback(Callback):
+    def __init__(self, learner):
+        self.learner = learner
+    def on_train_end(self, logs=None):
+        if self.learner.test_loader:
+            test_metrics = self.learner.validate(loader=self.learner.test_loader)
+            print(f"\nTest Metrics:")
+            print(f"  Test Accuracy: {test_metrics['val_accuracy']:.4f}")
