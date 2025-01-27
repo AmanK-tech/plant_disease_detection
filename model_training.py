@@ -35,7 +35,7 @@ class MetricCallback(Callback):
                     self.metrics[key].append(value)
 
 class Learner:
-    def __init__(self, model, train_loader, val_loader=None, test_loader=None, optimizer=None, loss_fn=None, device=None,callbacks=None):
+    def __init__(self, model, train_loader, val_loader=None, test_loader=None, optimizer=None, loss_fn=None, device=None, callbacks=None):
         self.device = device or (torch.cuda.is_available() and torch.device('cuda')) or torch.device('cpu')
 
         self.model = model.to(self.device)
@@ -68,11 +68,9 @@ class Learner:
         total_correct = 0
         total_samples = 0
 
-        self._run_callbacks('on_epoch_begin', self.current_epoch)
-
         for batch_idx, (inputs, targets) in enumerate(self.train_loader):
             if inputs is None or targets is None:
-              continue
+                continue
             inputs, targets = inputs.to(self.device), targets.to(self.device)
 
             self._run_callbacks('on_train_batch_begin', batch_idx)
@@ -101,18 +99,14 @@ class Learner:
         epoch_loss = total_loss / len(self.train_loader)
         epoch_accuracy = total_correct / total_samples
 
-        epoch_logs = {
-            'epoch': self.current_epoch,
+        return {
             'loss': epoch_loss,
             'accuracy': epoch_accuracy
         }
-        self._run_callbacks('on_epoch_end', self.current_epoch, logs=epoch_logs)
-
-        return epoch_logs
 
     def validate(self):
         if not self.val_loader:
-            return None
+            return {}
 
         self.model.eval()
         total_loss = 0
@@ -135,8 +129,8 @@ class Learner:
 
                 batch_logs = {
                     'batch': batch_idx,
-                    'loss': loss.item(),
-                    'accuracy': (predicted == targets).float().mean().item()
+                    'val_loss': loss.item(),
+                    'val_accuracy': (predicted == targets).float().mean().item()
                 }
                 self._run_callbacks('on_val_batch_end', batch_idx, logs=batch_logs)
 
@@ -153,23 +147,32 @@ class Learner:
 
         for epoch in range(epochs):
             self.current_epoch = epoch
+            self._run_callbacks('on_epoch_begin', epoch)
+
             train_metrics = self.train_epoch()
+            val_metrics = self.validate()
 
-            val_metrics = self.validate() if self.val_loader else {}
-
-            epoch_metrics = {**train_metrics, **val_metrics}
+            epoch_metrics = {
+                'epoch': epoch,
+                **train_metrics,
+                **val_metrics
+            }
 
             for key, value in epoch_metrics.items():
                 if key not in self.history:
                     self.history[key] = []
                 self.history[key].append(value)
 
+            self._run_callbacks('on_epoch_end', epoch, logs=epoch_metrics)
+
         self._run_callbacks('on_train_end')
         return self.history
 
 class PrintCallback(Callback):
     def on_epoch_end(self, epoch, logs=None):
-        print(f"Epoch {epoch}: {logs}")
-
-
-
+        logs = logs or {}
+        print(f"Epoch {epoch}:")
+        print(f"  Training Loss: {logs.get('loss', 'NA')}")
+        print(f"  Training Accuracy: {logs.get('accuracy', 'NA')}")
+        print(f"  Validation Loss: {logs.get('val_loss', 'NA')}")
+        print(f"  Validation Accuracy: {logs.get('val_accuracy', 'NA')}")
