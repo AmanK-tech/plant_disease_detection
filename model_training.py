@@ -56,6 +56,9 @@ class Learner:
 
         self.scaler = GradScaler()
 
+        for callback in self.callbacks:
+            callback.learner = self
+
     def _run_callbacks(self, event, *args, **kwargs):
         for callback in self.callbacks:
             method = getattr(callback, event, None)
