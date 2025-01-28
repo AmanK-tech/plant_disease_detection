@@ -35,6 +35,7 @@ class MetricCallback(Callback):
                     self.metrics[key].append(value)
 
 class Learner:
+  
     def __init__(self, model, train_loader, val_loader=None, test_loader=None, optimizer=None, loss_fn=None, device=None, callbacks=None):
         self.device = device or (torch.cuda.is_available() and torch.device('cuda')) or torch.device('cpu')
 
@@ -54,7 +55,7 @@ class Learner:
         self.current_epoch = 0
         self.history = {}
 
-        self.scaler = GradScaler('cuda')
+        self.scaler = GradScaler() if torch.cuda.is_available() else None
 
         for callback in self.callbacks:
             callback.learner = self
@@ -74,18 +75,26 @@ class Learner:
         for batch_idx, (inputs, targets) in enumerate(self.train_loader):
             if inputs is None or targets is None:
                 continue
-            inputs, targets = inputs.to(self.device,non_blocking=True), targets.to(self.device,non_blocking=True)
+            inputs, targets = inputs.to(self.device, non_blocking=True), targets.to(self.device, non_blocking=True)
 
             self._run_callbacks('on_train_batch_begin', batch_idx)
 
-            with autocast('cuda'):
+            if self.scaler:
+                with autocast():
+                    outputs = self.model(inputs)
+                    loss = self.loss_fn(outputs, targets)
+
+                self.optimizer.zero_grad()
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
                 outputs = self.model(inputs)
                 loss = self.loss_fn(outputs, targets)
-
-            self.optimizer.zero_grad()
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+                
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
 
             _, predicted = torch.max(outputs.data, 1)
             total_samples += targets.size(0)
@@ -100,16 +109,16 @@ class Learner:
             self._run_callbacks('on_train_batch_end', batch_idx, logs=batch_logs)
 
         epoch_loss = total_loss / len(self.train_loader)
-        epoch_accuracy = (total_correct / total_samples) *100
+        epoch_accuracy = (total_correct / total_samples) * 100
 
         return {
             'loss': epoch_loss,
             'accuracy': epoch_accuracy
         }
 
-    def validate(self,loader=None):
+    def validate(self, loader=None):
         loader = loader or self.val_loader
-        if not val_loader:
+        if not loader:  # Fixed: Changed val_loader to loader
             return {}
 
         self.model.eval()
@@ -118,7 +127,7 @@ class Learner:
         total_samples = 0
 
         with torch.no_grad():
-            for batch_idx, (inputs, targets) in enumerate(self.val_loader):
+            for batch_idx, (inputs, targets) in enumerate(loader):  # Fixed: Changed self.val_loader to loader
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
 
                 self._run_callbacks('on_val_batch_begin', batch_idx)
@@ -138,8 +147,8 @@ class Learner:
                 }
                 self._run_callbacks('on_val_batch_end', batch_idx, logs=batch_logs)
 
-        val_loss = total_loss / len(self.val_loader)
-        val_accuracy = (total_correct / total_samples)*100
+        val_loss = total_loss / len(loader)  # Fixed: Changed self.val_loader to loader
+        val_accuracy = (total_correct / total_samples) * 100
 
         return {
             'val_loss': val_loss,
