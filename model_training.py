@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 import numpy as np
 from typing import List, Callable, Dict, Any
 import time
@@ -54,7 +54,7 @@ class Learner:
         self.current_epoch = 0
         self.history = {}
 
-        self.scaler = GradScaler()
+        self.scaler = GradScaler('cuda')
 
         for callback in self.callbacks:
             callback.learner = self
@@ -78,7 +78,7 @@ class Learner:
 
             self._run_callbacks('on_train_batch_begin', batch_idx)
 
-            with autocast():
+            with autocast('cuda'):
                 outputs = self.model(inputs)
                 loss = self.loss_fn(outputs, targets)
 
@@ -107,9 +107,9 @@ class Learner:
             'accuracy': epoch_accuracy
         }
 
-    def validate(self):
+    def validate(self,loader=None):
         loader = loader or self.val_loader
-        if not self.val_loader:
+        if not val_loader:
             return {}
 
         self.model.eval()
