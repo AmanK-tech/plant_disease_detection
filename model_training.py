@@ -7,6 +7,7 @@ import numpy as np
 from typing import List, Callable, Dict, Any
 import time
 import os
+import matplotlib as plt
 
 class Callback:
     def on_train_begin(self, logs=None): pass
@@ -34,7 +35,120 @@ class MetricCallback(Callback):
                 if key in self.metrics:
                     self.metrics[key].append(value)
 
+
+class LRFinder:
+    def __init__(self, model, optimizer, criterion, device=None):
+        self.model = model
+        self.optimizer = optimizer
+        self.criterion = criterion
+        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        self.history = {'lr': [], 'loss': []}
+        self.best_loss = None
+        self.memory = {}
+    
+    def reset(self):
+        
+        for k, v in self.memory.items():
+            self.memory[k].copy_(v)
+                
+    def range_test(self, train_loader, end_lr=10, num_iter=100, smooth_f=0.05, diverge_th=5):
+        
+        self.history = {'lr': [], 'loss': []}
+        self.best_loss = None
+        self.model.to(self.device)
+        
+        
+        self.memory = {}
+        for k, v in self.model.state_dict().items():
+            self.memory[k] = v.clone()
+            
+        
+        lr_scheduler = ExponentialLR(self.optimizer, end_lr, num_iter)
+        
+        iterator = iter(train_loader)
+        for iteration in range(num_iter):
+            try:
+                inputs, labels = next(iterator)
+            except StopIteration:
+                iterator = iter(train_loader)
+                inputs, labels = next(iterator)
+
+            inputs = inputs.to(self.device)
+            labels = labels.to(self.device)
+
+            
+            self.optimizer.zero_grad()
+            outputs = self.model(inputs)
+            loss = self.criterion(outputs, labels)
+
+            
+            loss.backward()
+            self.optimizer.step()
+
+            
+            lr_scheduler.step()
+            current_lr = lr_scheduler.get_lr()[0]
+
+            
+            self.history['lr'].append(current_lr)
+            self.history['loss'].append(loss.item())
+
+            if self.best_loss is None:
+                self.best_loss = loss.item()
+            else:
+                if smooth_f > 0:
+                    loss = smooth_f * loss.item() + (1 - smooth_f) * self.history['loss'][-1]
+                if loss > diverge_th * self.best_loss:
+                    print('Stopping early, the loss has diverged')
+                    break
+                if loss < self.best_loss:
+                    self.best_loss = loss
+
+        self.reset()
+        
+    def plot(self, skip_start=10, skip_end=5, log_lr=True):
+        if skip_start < 0:
+            raise ValueError("skip_start cannot be negative")
+        if skip_end < 0:
+            raise ValueError("skip_end cannot be negative")
+        if skip_start >= skip_end:
+            raise ValueError("skip_start cannot be greater than skip_end")
+
+       
+        lrs = self.history['lr']
+        losses = self.history['loss']
+
+       
+        plt.figure(figsize=(10, 6))
+        if log_lr:
+            plt.semilogx(lrs[skip_start:-skip_end], losses[skip_start:-skip_end])
+        else:
+            plt.plot(lrs[skip_start:-skip_end], losses[skip_start:-skip_end])
+
+        plt.xlabel('Learning rate')
+        plt.ylabel('Loss')
+        plt.title('Learning rate range test')
+        plt.grid(True)
+        plt.show()
+
+class ExponentialLR:
+    def __init__(self, optimizer, end_lr, num_iter):
+        self.optimizer = optimizer
+        self.end_lr = end_lr
+        self.num_iter = num_iter
+        self.multiplier = (end_lr / optimizer.param_groups[0]['lr']) ** (1/num_iter)
+        
+    def step(self):
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] *= self.multiplier
+            
+    def get_lr(self):
+        return [param_group['lr'] for param_group in self.optimizer.param_groups]
+
+
 class Learner:
+
 
     def __init__(self, model, train_loader, val_loader=None, test_loader=None, optimizer=None, loss_fn=None, device=None, callbacks=None):
         self.device = device or (torch.cuda.is_available() and torch.device('cuda')) or torch.device('cpu')
@@ -180,6 +294,57 @@ class Learner:
 
         self._run_callbacks('on_train_end')
         return self.history
+
+    def find_lr(self, end_lr=10, num_iter=100, smooth_f=0.05, diverge_th=5):
+            lr_finder = LRFinder(self.model, self.optimizer, self.loss_fn, self.device)
+            lr_finder.range_test(self.train_loader, end_lr=end_lr, num_iter=num_iter, 
+                              smooth_f=smooth_f, diverge_th=diverge_th)
+            lr_finder.plot()
+            return lr_finder
+
+class PlotCallback(Callback):
+    def __init__(self, plot_every=1):
+        self.plot_every = plot_every
+        self.train_losses = []
+        self.val_losses = []
+        self.train_accuracies = []
+        self.val_accuracies = []
+        
+    def on_epoch_end(self, epoch, logs=None):
+        if logs:
+            self.train_losses.append(logs.get('loss', 0))
+            self.val_losses.append(logs.get('val_loss', 0))
+            self.train_accuracies.append(logs.get('accuracy', 0))
+            self.val_accuracies.append(logs.get('val_accuracy', 0))
+            
+            if (epoch + 1) % self.plot_every == 0:
+                self.plot_metrics()
+    
+    def plot_metrics(self):
+        epochs = range(1, len(self.train_losses) + 1)
+        
+        plt.figure(figsize=(15, 5))
+        
+        plt.subplot(1, 2, 1)
+        plt.plot(epochs, self.train_losses, 'b-', label='Training Loss')
+        plt.plot(epochs, self.val_losses, 'r-', label='Validation Loss')
+        plt.title('Training and Validation Loss')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
+        
+        plt.subplot(1, 2, 2)
+        plt.plot(epochs, self.train_accuracies, 'b-', label='Training Accuracy')
+        plt.plot(epochs, self.val_accuracies, 'r-', label='Validation Accuracy')
+        plt.title('Training and Validation Accuracy')
+        plt.xlabel('Epochs')
+        plt.ylabel('Accuracy (%)')
+        plt.legend()
+        plt.grid(True)
+        
+        plt.tight_layout()
+        plt.show()
 
 class PrintCallback(Callback):
     def on_epoch_end(self, epoch, logs=None):
