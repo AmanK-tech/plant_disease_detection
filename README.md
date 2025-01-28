@@ -22,6 +22,7 @@ The project is designed specifically for the **PlantVillage Dataset** and consis
 - scikit-learn
 - matplotlib
 - Pillow
+- Link to the dataset: [https://www.kaggle.com/datasets/emmarex/plantdisease](url)
 
 To install the required packages:
 ```bash
