@@ -8,8 +8,7 @@ import numpy as np
 from typing import List, Callable, Dict, Any
 import time
 import os
-import matplotlib as plt
-
+import matplotlib.pyplot as plt 
 class Callback:
     def on_train_begin(self, logs=None): pass
     def on_train_end(self, logs=None): pass
