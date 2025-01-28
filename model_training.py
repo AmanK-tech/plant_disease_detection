@@ -35,7 +35,7 @@ class MetricCallback(Callback):
                     self.metrics[key].append(value)
 
 class Learner:
-  
+
     def __init__(self, model, train_loader, val_loader=None, test_loader=None, optimizer=None, loss_fn=None, device=None, callbacks=None):
         self.device = device or (torch.cuda.is_available() and torch.device('cuda')) or torch.device('cpu')
 
@@ -118,7 +118,7 @@ class Learner:
 
     def validate(self, loader=None):
         loader = loader or self.val_loader
-        if not loader:  # Fixed: Changed val_loader to loader
+        if not loader:  
             return {}
 
         self.model.eval()
@@ -127,7 +127,7 @@ class Learner:
         total_samples = 0
 
         with torch.no_grad():
-            for batch_idx, (inputs, targets) in enumerate(loader):  # Fixed: Changed self.val_loader to loader
+            for batch_idx, (inputs, targets) in enumerate(loader):  
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
 
                 self._run_callbacks('on_val_batch_begin', batch_idx)
@@ -147,7 +147,7 @@ class Learner:
                 }
                 self._run_callbacks('on_val_batch_end', batch_idx, logs=batch_logs)
 
-        val_loss = total_loss / len(loader)  # Fixed: Changed self.val_loader to loader
+        val_loss = total_loss / len(loader)  
         val_accuracy = (total_correct / total_samples) * 100
 
         return {
