@@ -55,7 +55,7 @@ class Learner:
         self.current_epoch = 0
         self.history = {}
 
-        self.scaler = GradScaler() if torch.cuda.is_available() else None
+        self.scaler = GradScaler('cuda') if torch.cuda.is_available() else None
 
         for callback in self.callbacks:
             callback.learner = self
@@ -80,7 +80,7 @@ class Learner:
             self._run_callbacks('on_train_batch_begin', batch_idx)
 
             if self.scaler:
-                with autocast():
+                with autocast('cuda'):
                     outputs = self.model(inputs)
                     loss = self.loss_fn(outputs, targets)
 
