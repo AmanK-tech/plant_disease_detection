@@ -81,7 +81,7 @@ Generate DataLoaders for the train, validation, and test sets:
 ```python
 from data_loading import create_dataloaders
 
-train_loader, val_loader, test_loader = create_dataloaders("/path/to/output", batch_size=32)
+train_loader, val_loader, test_loader = create_dataloaders("/path/to/output", batch_size=128)
 ```
 
 ### Step 4: Define the Model
@@ -113,7 +113,7 @@ history = learner.fit(epochs=10)
 ```
 
 For replicating the **95% test accuracy**, ensure the following:
-- Use a batch size of **32**.
+- Use a batch size of **128**.
 - Learning rate set to **0.001**.
 - Train the model for **10 epochs** using the default configurations.
 
