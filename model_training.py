@@ -1,4 +1,5 @@
 
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -35,120 +36,7 @@ class MetricCallback(Callback):
                 if key in self.metrics:
                     self.metrics[key].append(value)
 
-
-class LRFinder:
-    def __init__(self, model, optimizer, criterion, device=None):
-        self.model = model
-        self.optimizer = optimizer
-        self.criterion = criterion
-        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
-        self.history = {'lr': [], 'loss': []}
-        self.best_loss = None
-        self.memory = {}
-    
-    def reset(self):
-        
-        for k, v in self.memory.items():
-            self.memory[k].copy_(v)
-                
-    def range_test(self, train_loader, end_lr=10, num_iter=100, smooth_f=0.05, diverge_th=5):
-        
-        self.history = {'lr': [], 'loss': []}
-        self.best_loss = None
-        self.model.to(self.device)
-        
-        
-        self.memory = {}
-        for k, v in self.model.state_dict().items():
-            self.memory[k] = v.clone()
-            
-        
-        lr_scheduler = ExponentialLR(self.optimizer, end_lr, num_iter)
-        
-        iterator = iter(train_loader)
-        for iteration in range(num_iter):
-            try:
-                inputs, labels = next(iterator)
-            except StopIteration:
-                iterator = iter(train_loader)
-                inputs, labels = next(iterator)
-
-            inputs = inputs.to(self.device)
-            labels = labels.to(self.device)
-
-            
-            self.optimizer.zero_grad()
-            outputs = self.model(inputs)
-            loss = self.criterion(outputs, labels)
-
-            
-            loss.backward()
-            self.optimizer.step()
-
-            
-            lr_scheduler.step()
-            current_lr = lr_scheduler.get_lr()[0]
-
-            
-            self.history['lr'].append(current_lr)
-            self.history['loss'].append(loss.item())
-
-            if self.best_loss is None:
-                self.best_loss = loss.item()
-            else:
-                if smooth_f > 0:
-                    loss = smooth_f * loss.item() + (1 - smooth_f) * self.history['loss'][-1]
-                if loss > diverge_th * self.best_loss:
-                    print('Stopping early, the loss has diverged')
-                    break
-                if loss < self.best_loss:
-                    self.best_loss = loss
-
-        self.reset()
-        
-    def plot(self, skip_start=10, skip_end=5, log_lr=True):
-        if skip_start < 0:
-            raise ValueError("skip_start cannot be negative")
-        if skip_end < 0:
-            raise ValueError("skip_end cannot be negative")
-        if skip_start >= skip_end:
-            raise ValueError("skip_start cannot be greater than skip_end")
-
-       
-        lrs = self.history['lr']
-        losses = self.history['loss']
-
-       
-        plt.figure(figsize=(10, 6))
-        if log_lr:
-            plt.semilogx(lrs[skip_start:-skip_end], losses[skip_start:-skip_end])
-        else:
-            plt.plot(lrs[skip_start:-skip_end], losses[skip_start:-skip_end])
-
-        plt.xlabel('Learning rate')
-        plt.ylabel('Loss')
-        plt.title('Learning rate range test')
-        plt.grid(True)
-        plt.show()
-
-class ExponentialLR:
-    def __init__(self, optimizer, end_lr, num_iter):
-        self.optimizer = optimizer
-        self.end_lr = end_lr
-        self.num_iter = num_iter
-        self.multiplier = (end_lr / optimizer.param_groups[0]['lr']) ** (1/num_iter)
-        
-    def step(self):
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] *= self.multiplier
-            
-    def get_lr(self):
-        return [param_group['lr'] for param_group in self.optimizer.param_groups]
-
-
 class Learner:
-
 
     def __init__(self, model, train_loader, val_loader=None, test_loader=None, optimizer=None, loss_fn=None, device=None, callbacks=None):
         self.device = device or (torch.cuda.is_available() and torch.device('cuda')) or torch.device('cpu')
@@ -295,12 +183,6 @@ class Learner:
         self._run_callbacks('on_train_end')
         return self.history
 
-    def find_lr(self, end_lr=10, num_iter=100, smooth_f=0.05, diverge_th=5):
-            lr_finder = LRFinder(self.model, self.optimizer, self.loss_fn, self.device)
-            lr_finder.range_test(self.train_loader, end_lr=end_lr, num_iter=num_iter, 
-                              smooth_f=smooth_f, diverge_th=diverge_th)
-            lr_finder.plot()
-            return lr_finder
 
 class PlotCallback(Callback):
     def __init__(self, plot_every=1):
@@ -345,6 +227,7 @@ class PlotCallback(Callback):
         
         plt.tight_layout()
         plt.show()
+
 
 class PrintCallback(Callback):
     def on_epoch_end(self, epoch, logs=None):
