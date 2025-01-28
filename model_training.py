@@ -8,7 +8,6 @@ import numpy as np
 from typing import List, Callable, Dict, Any
 import time
 import os
-import matplotlib.pyplot as plt 
 class Callback:
     def on_train_begin(self, logs=None): pass
     def on_train_end(self, logs=None): pass
@@ -202,27 +201,26 @@ class PlotCallback(Callback):
                 self.plot_metrics()
     
     def plot_metrics(self):
+        import matplotlib.pyplot as plt
         epochs = range(1, len(self.train_losses) + 1)
         
-        plt.figure(figsize=(15, 5))
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
         
-        plt.subplot(1, 2, 1)
-        plt.plot(epochs, self.train_losses, 'b-', label='Training Loss')
-        plt.plot(epochs, self.val_losses, 'r-', label='Validation Loss')
-        plt.title('Training and Validation Loss')
-        plt.xlabel('Epochs')
-        plt.ylabel('Loss')
-        plt.legend()
-        plt.grid(True)
+        ax1.plot(epochs, self.train_losses, 'b-', label='Training Loss')
+        ax1.plot(epochs, self.val_losses, 'r-', label='Validation Loss')
+        ax1.set_title('Training and Validation Loss')
+        ax1.set_xlabel('Epochs')
+        ax1.set_ylabel('Loss')
+        ax1.legend()
+        ax1.grid(True)
         
-        plt.subplot(1, 2, 2)
-        plt.plot(epochs, self.train_accuracies, 'b-', label='Training Accuracy')
-        plt.plot(epochs, self.val_accuracies, 'r-', label='Validation Accuracy')
-        plt.title('Training and Validation Accuracy')
-        plt.xlabel('Epochs')
-        plt.ylabel('Accuracy (%)')
-        plt.legend()
-        plt.grid(True)
+        ax2.plot(epochs, self.train_accuracies, 'b-', label='Training Accuracy')
+        ax2.plot(epochs, self.val_accuracies, 'r-', label='Validation Accuracy')
+        ax2.set_title('Training and Validation Accuracy')
+        ax2.set_xlabel('Epochs')
+        ax2.set_ylabel('Accuracy (%)')
+        ax2.legend()
+        ax2.grid(True)
         
         plt.tight_layout()
         plt.show()
